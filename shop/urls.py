@@ -3,30 +3,7 @@ from . import views
 
 urlpatterns = [
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    # Store endpoints
+    # Endpoints for Store
     path('stores/', views.list_stores, name='list_stores'),
     path('stores/products/', views.store_products, name='store_products'),
     path('stores/', views.create_store, name='create_store'),
