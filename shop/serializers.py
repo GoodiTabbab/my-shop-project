@@ -2,67 +2,6 @@ from rest_framework import serializers
 from .models import Store, Product, Order, OrderItem
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class ProductSerializer(serializers.ModelSerializer):
     image = serializers.SerializerMethodField()
 
