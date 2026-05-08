@@ -2,6 +2,30 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     # Store endpoints
     path('stores/', views.list_stores, name='list_stores'),
     path('stores/products/', views.store_products, name='store_products'),
