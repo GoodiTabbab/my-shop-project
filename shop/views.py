@@ -145,7 +145,7 @@ def create_store(request):
         }, status=status.HTTP_400_BAD_REQUEST)
 
     location = request.data.get('location', '')
-    import re
+
     if not re.match(r'^[a-zA-Z0-9\s,.-]{1,100}$', location):
         return Response({
             "Response Message": "Invalid Information",
@@ -165,9 +165,9 @@ def create_store(request):
         file_path = default_storage.save(f'stores/{filename}', ContentFile(image_file.read()))
 
         store = Store.objects.create(
-            name=request.data['name'],
-            description=request.data['description'],
-            location=location,
+            name=store_data['name'],
+            description=store_data['description'],
+            location=store_data['location'],
             image=file_path
         )
 
@@ -289,7 +289,17 @@ def search_store(request):
     }, status=status.HTTP_200_OK)
 
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def list_products(request):
+    """Display a listing of the products,index() method."""
+    products = Product.objects.all()
+    serializer = ProductSerializer(products, many=True, context={'request': request})
 
+    return Response({
+        "message": "Products retrieved successfully",
+        "products": serializer.data
+    }, status=status.HTTP_200_OK)
 
 
 
@@ -833,6 +843,18 @@ def list_pending_orders(request):
 
     return Response(serializer.data, status=status.HTTP_200_OK)
 
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_orders_pending(request):
+    """to display a listing of pending orders, index() method."""
+    orders = Order.objects.filter(state='pending')
+    serializer = OrderSerializer(orders, many=True, context={'request': request})
+
+    return Response({
+        "Message": "Orders Retrieved Successfully",
+        "Order": serializer.data
+    }, status=status.HTTP_200_OK)
 
 
 ####################
