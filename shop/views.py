@@ -1,19 +1,88 @@
-from django.shortcuts import render, get_object_or_404
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.shortcuts import render, get_object_or_404
 import os
 import time
 import re
 
-from .models import Store, Product, OrderItem, Order
-from .serializers import StoreSerializer, StoreWithProductsSerializer, ProductSerializer, OrderSerializer, \
-    OrderItemSerializer
+from .models import Cart, Product,Favorite, Store, Order, OrderItem
+from .serializers import CartSerializer
+
+from .serializers import UserSerializer, StoreSerializer, StoreWithProductsSerializer, ProductSerializer, OrderSerializer,OrderItemSerializer,FavoriteSerializer
+
+
+# 1. Register
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def register(request):
+    serializer = UserSerializer(data=request.data)
+    if serializer.is_valid():
+        user = serializer.save()
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            "Response Message": "Signed Up Successfully",
+            "User": serializer.data,
+            "Token": str(refresh.access_token),
+        }, status=status.HTTP_201_CREATED)
+    return Response({"Errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+# 2. Login
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login(request):
+    phone_number = request.data.get('phone_number')
+    password = request.data.get('password')
+
+    # التحقق من وجود المستخدم
+    user = authenticate(username=phone_number, password=password)
+
+    if user:
+        refresh = RefreshToken.for_user(user)
+        serializer = UserSerializer(user)
+        return Response({
+            "Response Message": f"{user.first_name} Signed In Successfully",
+            "User": serializer.data,
+            "Token": str(refresh.access_token)
+        })
+    return Response({"Response Message": "Wrong Password Or Phone Number"}, status=status.HTTP_400_BAD_REQUEST)
+
+# 3. Personal Information (Update Profile)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def personal_information(request):
+    user = request.user
+    # partial=True تعني أننا سنحدث بعض الحقول فقط وليس كلها (مثل Patch)
+    serializer = UserSerializer(user, data=request.data, partial=True)
+
+    if serializer.is_valid():
+        serializer.save()
+        return Response({
+            "Message": "Updated successfully",
+            "User": serializer.data
+        })
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+# 4. Profile Data (Me)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def me(request):
+    serializer = UserSerializer(request.user)
+    return Response({
+        "Response Message": "Profile Data Received Successfully",
+        "User": serializer.data
+    })
+
+# views.py
+
+
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -45,8 +114,7 @@ def store_products(request):
     return Response({
         "message": f"Store {store_name} products retrieved successfully",
         "products": serializer.data['products']
-    }, status=status.HTTP_200_OK)
-
+    },)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -115,6 +183,8 @@ def create_store(request):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def retrieve_store(request, id):
@@ -126,6 +196,7 @@ def retrieve_store(request, id):
         "Response Message": "Store retrieved successfully",
         "Store": serializer.data
     }, status=status.HTTP_200_OK)
+
 
 
 @api_view(['PUT', 'PATCH'])
@@ -218,19 +289,9 @@ def search_store(request):
     }, status=status.HTTP_200_OK)
 
 
-#######################################
 
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def list_products(request):
-    """Display a listing of the products,index() method."""
-    products = Product.objects.all()
-    serializer = ProductSerializer(products, many=True, context={'request': request})
 
-    return Response({
-        "message": "Products retrieved successfully",
-        "products": serializer.data
-    }, status=status.HTTP_200_OK)
+
 
 
 @api_view(['POST'])
@@ -332,6 +393,7 @@ def retrieve_product(request, id):
     }, status=status.HTTP_200_OK)
 
 
+
 @api_view(['PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def update_product(request, id):
@@ -409,17 +471,6 @@ def update_product(request, id):
     }, status=status.HTTP_200_OK)
 
 
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
-def delete_product(request, id):
-    """Remove the specified product from storage, destroy() method."""
-    product = get_object_or_404(Product, id=id)
-    product.delete()
-
-    return Response({
-        "Message : ": "Deleted Successfully"
-    }, status=status.HTTP_200_OK)
-
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -447,19 +498,260 @@ def search_product(request):
     }, status=status.HTTP_200_OK)
 
 
-#####################################
-@api_view(['GET'])
+
+
+@api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
-def list_orders_pending(request):
-    """to display a listing of pending orders, index() method."""
-    orders = Order.objects.filter(state='pending')
-    serializer = OrderSerializer(orders, many=True, context={'request': request})
+def delete_product(request, id):
+    """Remove the specified product from storage, destroy() method."""
+    product = get_object_or_404(Product, id=id)
+    product.delete()
 
     return Response({
-        "Message": "Orders Retrieved Successfully",
-        "Order": serializer.data
+        "Message : ": "Deleted Successfully"
     }, status=status.HTTP_200_OK)
 
+
+
+# =========================
+# Get All Cart Items
+# =========================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def cart_index(request):
+
+    carts = Cart.objects.filter(
+        user=request.user
+    ).select_related('product')
+
+    serializer = CartSerializer(
+        carts,
+        many=True,
+        context={'request': request}
+    )
+
+    return Response({
+        "Cart": serializer.data,
+        "Message": "Retrieved Successfully"
+    })
+
+
+# =========================
+# Add Product To Cart
+# =========================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def cart_store(request):
+
+    name = request.data.get('name')
+    quantity = int(request.data.get('quantity', 1))
+
+    try:
+        product = Product.objects.get(name=name)
+
+    except Product.DoesNotExist:
+        return Response({
+            'message': 'Product not found'
+        }, status=404)
+
+    cart_item = Cart.objects.filter(
+        user=request.user,
+        product=product
+    ).first()
+
+    if cart_item:
+
+        cart_item.quantity += quantity
+        cart_item.price += product.price * quantity
+        cart_item.save()
+
+    else:
+
+        Cart.objects.create(
+            user=request.user,
+            product=product,
+            quantity=quantity,
+            price=product.price * quantity
+        )
+
+    return Response({
+        'message': 'Product added to cart'
+    })
+
+
+# =========================
+# Delete Cart Item
+# =========================
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def cart_destroy(request):
+
+    product_id = request.data.get('product_id')
+
+    cart = Cart.objects.filter(
+        user=request.user,
+        product_id=product_id
+    ).first()
+
+    if not cart:
+        return Response({
+            "message": "Cart item not found"
+        }, status=404)
+
+    cart.delete()
+
+    return Response({
+        "message": "Cart item deleted successfully"
+    })
+
+
+# =========================
+# Increase Quantity
+# =========================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def increase_cart(request):
+
+    product_id = request.data.get('product_id')
+
+    cart = Cart.objects.filter(
+        user=request.user,
+        product_id=product_id
+    ).first()
+
+    if not cart:
+        return Response({
+            "message": "Cart item not found"
+        }, status=404)
+
+    cart.quantity += 1
+    cart.price += cart.product.price
+    cart.save()
+
+    return Response({
+        "message": "Quantity increased",
+        "cart": CartSerializer(cart).data
+    })
+
+
+# =========================
+# Decrease Quantity
+# =========================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def decrease_cart(request):
+
+    product_id = request.data.get('product_id')
+
+    cart = Cart.objects.filter(
+        user=request.user,
+        product_id=product_id
+    ).first()
+
+    if not cart:
+        return Response({
+            "message": "Cart item not found"
+        }, status=404)
+
+    if cart.quantity > 1:
+        cart.quantity -= 1
+        cart.price -= cart.product.price
+        cart.save()
+
+    else:
+        cart.delete()
+
+    return Response({
+        "message": "Quantity decreased"
+    })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def add_product_favorite(request):
+
+    product_id = request.data.get('product_id')
+
+    if not product_id:
+        return Response({
+            "message": "product_id is required"
+        }, status=400)
+
+    try:
+        product = Product.objects.get(id=product_id)
+
+    except Product.DoesNotExist:
+        return Response({
+            "message": "Product not found"
+        }, status=404)
+
+    favorite_exists = Favorite.objects.filter(
+        user=request.user,
+        product=product
+    ).exists()
+
+    if favorite_exists:
+        return Response({
+            "message": "Already in favorites"
+        }, status=400)
+
+    Favorite.objects.create(
+        user=request.user,
+        product=product
+    )
+
+    return Response({
+        "message": "Product added to favorites",
+        "status": True
+    })
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_product_favorite(request):
+
+    favorites = Favorite.objects.filter(
+        user=request.user
+    ).select_related('product')
+
+    serializer = FavoriteSerializer(
+        favorites,
+        many=True,
+        context={'request': request}
+    )
+
+    return Response({
+        'data': serializer.data,
+        'message': 'success message',
+    })
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_product_favorite(request):
+
+    product_id = request.data.get('product_id')
+
+    favorite = Favorite.objects.filter(
+        user=request.user,
+        product_id=product_id
+    ).first()
+
+    if not favorite:
+        return Response({
+            "message": "Favorite product not found",
+            "status": False
+        }, status=404)
+
+    favorite.delete()
+
+    return Response({
+        "message": "Favorite product deleted successfully",
+        "status": True
+    })
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -493,6 +785,7 @@ def order_details(request):
         "Items": serializer.data,
         "Message : ": "Retrieved Successfully"
     }, status=status.HTTP_200_OK)
+
 
 
 @api_view(['POST'])
@@ -541,6 +834,7 @@ def list_pending_orders(request):
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+
 ####################
 @api_view(['PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
@@ -551,6 +845,8 @@ def update_order_status(request):
     return Response({
         "Message : ": "The order is being delivered"
     }, status=status.HTTP_200_OK)
+
+
 
 
 @api_view(['DELETE'])
@@ -569,6 +865,7 @@ def delete_order(request):
     return Response({
         "Message": "Orders deleted Successfully"
     }, status=status.HTTP_200_OK)
+
 
 
 @api_view(['PUT', 'PATCH'])
@@ -591,6 +888,7 @@ def update_order_shipped(request):
     }, status=status.HTTP_200_OK)
 
 
+
 @api_view(['PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def update_order_delivered(request):
@@ -609,6 +907,7 @@ def update_order_delivered(request):
         "Message": "Orders Delivered Successfully",
         "Order": OrderSerializer(order, context={'request': request}).data
     }, status=status.HTTP_200_OK)
+
 
 
 @api_view(['POST'])
@@ -643,6 +942,7 @@ def remove_product_from_order(request):
     }, status=status.HTTP_200_OK)
 
 
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def increase_order_item(request):
@@ -673,6 +973,7 @@ def increase_order_item(request):
         "message": "Increased Successfully",
         "Order": OrderSerializer(order, context={'request': request}).data
     }, status=status.HTTP_200_OK)
+
 
 
 @api_view(['POST'])
@@ -716,4 +1017,11 @@ def decrease_order_item(request):
             "message": "Item removed from order",
             "Order": OrderSerializer(order, context={'request': request}).data
         }, status=status.HTTP_200_OK)
+
+
+
+
+
+
+
 

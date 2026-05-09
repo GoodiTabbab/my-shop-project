@@ -1,19 +1,45 @@
 from django.db import models
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, BaseUserManager
 
-# 1. User Model
+class CustomUserManager(BaseUserManager):
+    def create_user(self, phone_number, password=None, **extra_fields):
+        if not phone_number:
+            raise ValueError('The Phone Number field must be set')
+        # جعل الـ username يطابق الهاتف تلقائياً لضمان الفرادة
+        extra_fields.setdefault('username', phone_number)
+        user = self.model(phone_number=phone_number, **extra_fields)
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
+
+    def create_superuser(self, phone_number, password=None, **extra_fields):
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('is_superuser', True)
+        return self.create_user(phone_number, password, **extra_fields)
+
 class User(AbstractUser):
+    # الحقول الأساسية
+    phone_number = models.CharField(max_length=20, unique=True)
     first_name = models.CharField(max_length=150, blank=True, null=True)
     last_name = models.CharField(max_length=150, blank=True, null=True)
-    phone_number = models.CharField(max_length=20, unique=True)
-    image = models.ImageField(upload_to='users/', blank=True, null=True)
+    
+    # الحقول التي كانت تسبب نقصاً أو أخطاء
     location = models.CharField(max_length=255, blank=True, null=True)
-    email = models.EmailField(unique=True, blank=True, null=True)
     role = models.CharField(max_length=50, default='user')
+    image = models.ImageField(upload_to='users/', blank=True, null=True)
+    
+    # حقول إضافية للمستقبل (اختياري)
+    email = models.EmailField(unique=True, blank=True, null=True)
     x_and_y = models.CharField(max_length=255, blank=True, null=True)
 
-    USERNAME_FIELD = 'phone_number' 
-    REQUIRED_FIELDS = ['username', 'email']
+    # إعدادات الهوية
+    USERNAME_FIELD = 'phone_number'
+    REQUIRED_FIELDS = [] # تركناها فارغة لأن التسجيل بالهاتف فقط
+
+    objects = CustomUserManager()
+
+    def __str__(self):
+        return self.phone_number
 
 # 2. Store Model
 class Store(models.Model):
