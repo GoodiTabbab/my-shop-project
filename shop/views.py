@@ -109,41 +109,38 @@ def cart_index(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def cart_store(request):
-
     name = request.data.get('name')
-    quantity = int(request.data.get('quantity', 1))
+    quantity_to_add = int(request.data.get('quantity', 1))
 
     try:
         product = Product.objects.get(name=name)
-
     except Product.DoesNotExist:
-        return Response({
-            'message': 'Product not found'
-        }, status=404)
+        return Response({'message': 'Product not found'}, status=404)
 
-    cart_item = Cart.objects.filter(
-        user=request.user,
-        product=product
-    ).first()
+    cart_item = Cart.objects.filter(user=request.user, product=product).first()
+    
+    current_in_cart = cart_item.quantity if cart_item else 0
+    total_requested_quantity = current_in_cart + quantity_to_add
+
+    if total_requested_quantity > product.quantity:
+        return Response({
+            'message': f'Sorry, only {product.quantity} items available in stock. You already have {current_in_cart} in cart.',
+            'available_stock': product.quantity
+        }, status=status.HTTP_400_BAD_REQUEST)
 
     if cart_item:
-
-        cart_item.quantity += quantity
-        cart_item.price += product.price * quantity
+        cart_item.quantity = total_requested_quantity
+        cart_item.price += product.price * quantity_to_add
         cart_item.save()
-
     else:
-
         Cart.objects.create(
             user=request.user,
             product=product,
-            quantity=quantity,
-            price=product.price * quantity
+            quantity=quantity_to_add,
+            price=product.price * quantity_to_add
         )
 
-    return Response({
-        'message': 'Product added to cart'
-    })
+    return Response({'message': 'Product added to cart successfully'})
 
 
 # =========================
@@ -193,6 +190,14 @@ def increase_cart(request):
             "message": "Cart item not found"
         }, status=404)
 
+    # التحقق من الكمية المتوفرة
+    if cart.quantity >= cart.product.quantity:
+        return Response({
+            "message": f"Sorry, only {cart.product.quantity} items available",
+            "available_quantity": cart.product.quantity
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # زيادة الكمية
     cart.quantity += 1
     cart.price += cart.product.price
     cart.save()
