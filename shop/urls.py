@@ -25,7 +25,7 @@ urlpatterns = [
 
     # Endpoints for Store
     path('stores/', views.list_stores, name='list_stores'),
-    path('stores/', views.create_store, name='create_store'),
+    path('stores/create/', views.create_store, name='create_store'),
     path('stores/<int:id>/', views.retrieve_store, name='retrieve_store'),
     path('stores/<int:id>/update/', views.update_store, name='update_store'),
     path('stores/<int:id>/delete/', views.delete_store, name='delete_store'),
@@ -34,7 +34,7 @@ urlpatterns = [
 
     # Product endpoints
     path('products/', views.list_products, name='list_products'),
-    path('products/', views.create_product, name='create_product'),
+    path('products/create/', views.create_product, name='create_product'),
     path('products/<int:id>/', views.retrieve_product, name='retrieve_product'),
     path('products/<int:id>/update/', views.update_product, name='update_product'),
     path('products/<int:id>/delete/', views.delete_product, name='delete_product'),
