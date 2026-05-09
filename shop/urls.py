@@ -25,11 +25,11 @@ urlpatterns = [
 
     # Endpoints for Store
     path('stores/', views.list_stores, name='list_stores'),
-    path('stores/products/', views.store_products, name='store_products'),
     path('stores/', views.create_store, name='create_store'),
     path('stores/<int:id>/', views.retrieve_store, name='retrieve_store'),
     path('stores/<int:id>/update/', views.update_store, name='update_store'),
     path('stores/<int:id>/delete/', views.delete_store, name='delete_store'),
+    path('stores/products/', views.store_products, name='store_products'),
     path('stores/search/', views.search_store, name='search_store'),
 
     # Product endpoints
