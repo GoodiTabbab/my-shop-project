@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import User
 import re
-from .models import Favorite, Product
+from .models import Favorite, Product, Store, Order, OrderItem
 from .models import Cart
 
 class UserSerializer(serializers.ModelSerializer):
@@ -17,7 +17,7 @@ class UserSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Invalid phone number format.")
         return value
 
-    
+
     def create(self, validated_data):
         # استدعاء الـ Manager الذي أنشأناه أعلاه
         return User.objects.create_user(**validated_data)
@@ -51,7 +51,7 @@ class CartSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Cart
-        fields = '__all__'    
+        fields = '__all__'
 
 class FavoriteSerializer(serializers.ModelSerializer):
 
@@ -59,4 +59,44 @@ class FavoriteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Favorite
-        fields = '__all__'        
+        fields = '__all__'
+
+class StoreSerializer(serializers.ModelSerializer):
+    image = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Store
+        fields = ['id', 'name', 'description', 'image', 'location', 'created_at', 'updated_at']
+
+    def get_image(self, obj):
+        if obj.image:
+            request = self.context.get('request')
+            if request is not None:
+                return request.build_absolute_uri(obj.image.url)
+            return obj.image.url
+        return None
+
+
+
+class StoreWithProductsSerializer(StoreSerializer):
+    products = ProductSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Store
+        fields = ['id', 'name', 'description', 'image', 'location', 'created_at', 'updated_at', 'products']
+
+
+class OrderItemSerializer(serializers.ModelSerializer):
+    product = ProductSerializer(read_only=True)
+
+    class Meta:
+        model = OrderItem
+        fields = ['id', 'product', 'quantity', 'price', 'created_at']
+
+
+class OrderSerializer(serializers.ModelSerializer):
+    items = OrderItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Order
+        fields = ['id', 'user', 'cost', 'state', 'location', 'pay_status', 'created_at', 'updated_at', 'items']
