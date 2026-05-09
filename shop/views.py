@@ -823,12 +823,20 @@ def create_order(request):
     }
     order = Order.objects.create(**order_data)
     for cart_item in cart_items:
+
+        product = cart_item.product
+        if cart_item.quantity > product.quantity:
+            return Response({
+                "message": f"Sorry, only {product.quantity} left for {product.name}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+        product.quantity -= cart_item.quantity
+        product.save()
         OrderItem.objects.create(
             order=order,
-            product=cart_item.product,
+            product=product,
             quantity=cart_item.quantity,
             price=cart_item.price
-        )
+    )
 
     cart_items.delete()
 
@@ -973,9 +981,10 @@ def remove_product_from_order(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def increase_order_item(request):
-    """Increase quantity of a product in an order,increase() method"""
+
     order_id = request.data.get('order_id')
     product_id = request.data.get('product_id')
+
     if not order_id or not product_id:
         return Response({
             "message": "Order ID and Product ID are required"
@@ -984,21 +993,36 @@ def increase_order_item(request):
     order = get_object_or_404(Order, id=order_id)
     product = get_object_or_404(Product, id=product_id)
 
-    order_item = OrderItem.objects.filter(order=order, product=product).first()
+    order_item = OrderItem.objects.filter(
+        order=order,
+        product=product
+    ).first()
+
     if not order_item:
         return Response({
             "message": "Product not found in the order."
         }, status=status.HTTP_404_NOT_FOUND)
 
+    # تحقق من الكمية المتوفرة
+    if order_item.quantity >= product.quantity:
+        return Response({
+            "message": f"Sorry, only {product.quantity} available"
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # زيادة الكمية
     order_item.quantity += 1
     order_item.price += product.price
     order_item.save()
+
     order.cost += product.price
     order.save()
 
     return Response({
         "message": "Increased Successfully",
-        "Order": OrderSerializer(order, context={'request': request}).data
+        "Order": OrderSerializer(
+            order,
+            context={'request': request}
+        ).data
     }, status=status.HTTP_200_OK)
 
 
