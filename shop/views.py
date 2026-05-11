@@ -12,12 +12,25 @@ from django.shortcuts import render, get_object_or_404
 import os
 import time
 import re
-
+ 
+from decimal import Decimal
+from .models import Wallet
+from django.db import transaction
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from .models import Order, WalletTransaction
 from .models import Cart, Product,Favorite, Store, Order, OrderItem
 from .serializers import CartSerializer
 
 from .serializers import UserSerializer, StoreSerializer, StoreWithProductsSerializer, ProductSerializer, OrderSerializer,OrderItemSerializer,FavoriteSerializer
+from django.db import transaction  
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework import permissions
 
+class IsAdminUserRole(permissions.BasePermission):
+    """صلاحية تسمح فقط للمستخدمين الذين يحملون دور admin بالوصول"""
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.role == 'admin')
 
 # 1. Register
 @api_view(['POST'])
@@ -25,7 +38,7 @@ from .serializers import UserSerializer, StoreSerializer, StoreWithProductsSeria
 def register(request):
     serializer = UserSerializer(data=request.data)
     if serializer.is_valid():
-        user = serializer.save()
+        user = serializer.save(role='customer')
         refresh = RefreshToken.for_user(user)
         return Response({
             "Response Message": "Signed Up Successfully",
@@ -59,7 +72,9 @@ def login(request):
 @permission_classes([IsAuthenticated])
 def personal_information(request):
     user = request.user
-    # partial=True تعني أننا سنحدث بعض الحقول فقط وليس كلها (مثل Patch)
+    data = request.data.copy()
+    if 'role' in data:
+        data.pop('role')
     serializer = UserSerializer(user, data=request.data, partial=True)
 
     if serializer.is_valid():
@@ -117,7 +132,7 @@ def store_products(request):
     },)
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdminUserRole]) # تغيير من IsAuthenticated إلى صلاحية الآدمن
 def create_store(request):
     """Store a newly created store in storage."""
     required_fields = ['name', 'description', 'image', 'location']
@@ -200,7 +215,7 @@ def retrieve_store(request, id):
 
 
 @api_view(['PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdminUserRole]) # تغيير من IsAuthenticated إلى صلاحية الآدمن
 def update_store(request, id):
     """Update the specified store in storage."""
     store = get_object_or_404(Store, id=id)
@@ -253,7 +268,7 @@ def update_store(request, id):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdminUserRole]) # تغيير من IsAuthenticated إلى صلاحية الآدمن
 def delete_store(request, id):
     """Remove the specified store from storage."""
     store = get_object_or_404(Store, id=id)
@@ -305,7 +320,7 @@ def list_products(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdminUserRole]) # منع الزبائن من حذف المنتجات
 def create_product(request):
     """Store a newly created product in storage, store() method."""
     required_fields = ['name', 'description', 'quantity', 'price', 'image', 'brand', 'store_name']
@@ -405,7 +420,7 @@ def retrieve_product(request, id):
 
 
 @api_view(['PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdminUserRole]) # منع الزبائن من حذف المنتجات
 def update_product(request, id):
     """Update the specified product in storage,update() method."""
     product = get_object_or_404(Product, id=id)
@@ -511,7 +526,7 @@ def search_product(request):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdminUserRole]) # منع الزبائن من حذف المنتجات
 def delete_product(request, id):
     """Remove the specified product from storage, destroy() method."""
     product = get_object_or_404(Product, id=id)
@@ -818,7 +833,7 @@ def create_order(request):
         'user': user,
         'cost': total_cost,
         'state': 'pending',
-        'pay_status': request.data.get('pay_status', False),
+        'pay_status': False,
         'location': request.data.get('location', '')
     }
     order = Order.objects.create(**order_data)
@@ -848,31 +863,16 @@ def create_order(request):
 
 #######??????? what is the difference between this one and index() or list_orders_pending()?
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdminUserRole]) # منع الزبائن من حذف المنتجات
 def list_pending_orders(request):
     """listing of pending orders (alternative endpoint),show() method"""
     orders = Order.objects.filter(state='pending')
     serializer = OrderSerializer(orders, many=True, context={'request': request})
 
     return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def list_orders_pending(request):
-    """to display a listing of pending orders, index() method."""
-    orders = Order.objects.filter(state='pending')
-    serializer = OrderSerializer(orders, many=True, context={'request': request})
-
-    return Response({
-        "Message": "Orders Retrieved Successfully",
-        "Order": serializer.data
-    }, status=status.HTTP_200_OK)
-
-
 ####################
 @api_view(['PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdminUserRole]) 
 def update_order_status(request):
     """Update order status,update() method."""
     # This is a placeholder since the original PHP implementation had issues
@@ -884,27 +884,54 @@ def update_order_status(request):
 
 
 
-@api_view(['DELETE'])
+
+
+
+@api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def delete_order(request):
-    """Delete an order by ID"""
-    order_id = request.query_params.get('order_id')
-    if not order_id:
-        return Response({
-            "Message": "Order ID is required"
-        }, status=status.HTTP_400_BAD_REQUEST)
+def cancel_order(request, order_id):
+    order = get_object_or_404(Order, id=order_id, user=request.user)
 
-    order = get_object_or_404(Order, id=order_id)
-    order.delete()
+    # 1. التأكد من حالة الطلب
+    if order.state in ['shipped', 'delivered', 'canceled']:
+        return Response({"error": "لا يمكن إلغاء هذا الطلب في حالته الحالية"}, status=400)
 
-    return Response({
-        "Message": "Orders deleted Successfully"
-    }, status=status.HTTP_200_OK)
+    try:
+        with transaction.atomic():
+            # 2. جلب المحفظة بأمان
+            try:
+                wallet = request.user.wallet
+            except:
+                return Response({"error": "لا توجد محفظة مرتبطة بهذا الحساب"}, status=404)
+            
+            # 3. التحقق وإعادة المال (تأكد من اسم الحقل: هل هو cost أم total_price؟)
+            if order.pay_status:
+                # استخدمنا Decimal و str للضمان، واستخدمنا total_price بناءً على الخطأ السابق
+                refund_amount = Decimal(str(order.cost)) 
+                wallet.balance += refund_amount
+                wallet.save()
 
+                # 4. سجل الترانزاكشن
+                WalletTransaction.objects.create(
+                    wallet=wallet,
+                    order=order,
+                    amount=refund_amount,
+                    transaction_type='refund',
+                    description=f"إرجاع مبلغ الطلب الملغي رقم {order.id}"
+                )
 
+            # 5. تحديث حالة الطلب
+            order.state = 'canceled'
+            order.pay_status = False 
+            order.save()
 
+        return Response({"message": "تم إلغاء الطلب وإعادة المبلغ لمحفظتكم بنجاح"})
+
+    except Exception as e:
+        # نصيحة: استبدل الرسالة العامة بـ str(e) أثناء التطوير لتعرف الخطأ بالضبط
+        return Response({"error": f"حدث خطأ: {str(e)}"}, status=500)
 @api_view(['PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdminUserRole]) # منع الزبائن من حذف المنتجات
 def update_order_shipped(request):
     """Update order state to 'shipped'"""
     order_id = request.data.get('order_id')
@@ -925,7 +952,7 @@ def update_order_shipped(request):
 
 
 @api_view(['PUT', 'PATCH'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdminUserRole]) # منع الزبائن من حذف المنتجات
 def update_order_delivered(request):
     """Update order state to 'delivered'"""
     order_id = request.data.get('order_id')
@@ -945,131 +972,48 @@ def update_order_delivered(request):
 
 
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def remove_product_from_order(request):
-    """Remove a product from an order."""
-    order_id = request.data.get('order_id')
-    product_name = request.data.get('product_name')
-
-    if not order_id or not product_name:
-        return Response({
-            "message": "Order ID and Product name are required"
-        }, status=status.HTTP_400_BAD_REQUEST)
-
-    order = get_object_or_404(Order, id=order_id)
-    product = get_object_or_404(Product, name=product_name)
-    order_item = OrderItem.objects.filter(order=order, product=product).first()
-    if not order_item:
-        return Response({
-            "message": "Product not found in the order."
-        }, status=status.HTTP_404_NOT_FOUND)
-
-    order.cost -= order_item.price * order_item.quantity
-    order.save()
-    order_item.delete()
-    if not order.items.exists():
-        order.delete()
-
-    return Response({
-        "message": "Product removed from the order successfully.",
-        "order": OrderSerializer(order, context={'request': request}).data
-    }, status=status.HTTP_200_OK)
-
-
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def increase_order_item(request):
+def pay_order_by_wallet(request, order_id):
+    order = get_object_or_404(Order, id=order_id, user=request.user)
+    
+    if order.pay_status:
+        return Response({"error": "الطلب مدفوع بالفعل"}, status=400)
 
-    order_id = request.data.get('order_id')
-    product_id = request.data.get('product_id')
+    # استخدام transaction.atomic يضمن تنفيذ كل الخطوات أو فشلها جميعاً (حماية بيانات)
+    try:
+        with transaction.atomic():
+            # قفل سجل المحفظة لمنع التضارب (Concurrency Handling)
+            wallet = Wallet.objects.select_for_update().get(user=request.user)
+            
+            if wallet.balance < order.cost:
+                return Response({"error": "رصيدك غير كافٍ"}, status=400)
 
-    if not order_id or not product_id:
-        return Response({
-            "message": "Order ID and Product ID are required"
-        }, status=status.HTTP_400_BAD_REQUEST)
+            # 1. خصم الرصيد
+            wallet.balance -= Decimal(str(order.cost))
+            wallet.save()
+            # تحويل السعر إلى Decimal قبل الطرح
 
-    order = get_object_or_404(Order, id=order_id)
-    product = get_object_or_404(Product, id=product_id)
+            # 2. تحديث الطلب
+            order.pay_status = True
+            order.state = 'processed'
+            order.save()
 
-    order_item = OrderItem.objects.filter(
-        order=order,
-        product=product
-    ).first()
+            # 3. تسجيل العملية في جدول الـ Transactions
+            WalletTransaction.objects.create(
+                wallet=wallet,
+                order=order,
+                amount=order.cost,
+                transaction_type='withdraw',
+                description=f"دفع قيمة الطلب رقم {order.id}"
+            )
 
-    if not order_item:
-        return Response({
-            "message": "Product not found in the order."
-        }, status=status.HTTP_404_NOT_FOUND)
-
-    # تحقق من الكمية المتوفرة
-    if order_item.quantity >= product.quantity:
-        return Response({
-            "message": f"Sorry, only {product.quantity} available"
-        }, status=status.HTTP_400_BAD_REQUEST)
-
-    # زيادة الكمية
-    order_item.quantity += 1
-    order_item.price += product.price
-    order_item.save()
-
-    order.cost += product.price
-    order.save()
-
-    return Response({
-        "message": "Increased Successfully",
-        "Order": OrderSerializer(
-            order,
-            context={'request': request}
-        ).data
-    }, status=status.HTTP_200_OK)
-
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def decrease_order_item(request):
-    """Decrease quantity of a product in an order, decrease() method"""
-    order_id = request.data.get('order_id')
-    product_id = request.data.get('product_id')
-
-    if not order_id or not product_id:
-        return Response({
-            "message": "Order ID and Product ID are required"
-        }, status=status.HTTP_400_BAD_REQUEST)
-
-    order = get_object_or_404(Order, id=order_id)
-    product = get_object_or_404(Product, id=product_id)
-
-    order_item = OrderItem.objects.filter(order=order, product=product).first()
-    if not order_item:
-        return Response({
-            "message": "Product not found in the order."
-        }, status=status.HTTP_404_NOT_FOUND)
-
-    if order_item.quantity > 1:
-        order_item.quantity -= 1
-        order_item.price -= product.price
-        order_item.save()
-        order.cost -= product.price
-        order.save()
-
-        return Response({
-            "message": "Decreased Successfully",
-            "Order": OrderSerializer(order, context={'request': request}).data
-        }, status=status.HTTP_200_OK)
-    else:
-        order.cost -= product.price
-        order.save()
-        order_item.delete()
-
-        return Response({
-            "message": "Item removed from order",
-            "Order": OrderSerializer(order, context={'request': request}).data
-        }, status=status.HTTP_200_OK)
-
-
+        return Response({"message": "تم الدفع وتسجيل العملية بنجاح"})
+        
+    except Exception as e:
+        print(str(e)) # هذا السطر سيطبع لك المشكلة الحقيقية في شاشة السوداء (Terminal)
+        return Response({"error": "حدث خطأ أثناء المعالجة، حاول لاحقاً"}, status=500)
 
 
 
