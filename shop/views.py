@@ -19,7 +19,7 @@ from django.db import transaction
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import Order, WalletTransaction
-from .models import Cart, Product,Favorite, Store, Order, OrderItem
+from .models import Cart, Product,Favorite, Store, Order, OrderItem , Product
 from .serializers import CartSerializer
 
 from .serializers import UserSerializer, StoreSerializer, StoreWithProductsSerializer, ProductSerializer, OrderSerializer,OrderItemSerializer,FavoriteSerializer
@@ -919,7 +919,11 @@ def cancel_order(request, order_id):
                     transaction_type='refund',
                     description=f"إرجاع مبلغ الطلب الملغي رقم {order.id}"
                 )
-
+            order_items = order.items.all() # تأكد من أن related_name في موديل OrderItem هو 'items'
+            for item in order_items:
+                product = item.product
+                product.quantity += item.quantity # إعادة الكمية المخزنة
+                product.save()
             # 5. تحديث حالة الطلب
             order.state = 'canceled'
             order.pay_status = False 
