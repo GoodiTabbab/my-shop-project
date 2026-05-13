@@ -834,31 +834,71 @@ def increase_cart(request):
     })
 
 
+#Before handling the race conditions
+# @api_view(['POST'])
+# @permission_classes([IsAuthenticated])
+# def decrease_cart(request):
+#
+#     product_id = request.data.get('product_id')
+#
+#     cart = Cart.objects.filter(
+#         user=request.user,
+#         product_id=product_id
+#     ).first()
+#
+#     if not cart:
+#         return Response({
+#             "message": "Cart item not found"
+#         }, status=404)
+#
+#     if cart.quantity > 1:
+#         cart.quantity -= 1
+#         cart.price -= cart.product.price
+#         cart.save()
+#
+#     else:
+#         cart.delete()
+#
+#     return Response({
+#         "message": "Quantity decreased"
+#     })
 
 
+
+
+#After handling the race conditions
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def decrease_cart(request):
-
+    #we follow the same approach as increasing the cart quantity
     product_id = request.data.get('product_id')
+    with transaction.atomic():
+        # we lock the cart row to serialize concurrent decrease requests.
+        cart = Cart.objects.select_for_update().filter(
+            user=request.user,
+            product_id=product_id
+        ).first()
 
-    cart = Cart.objects.filter(
-        user=request.user,
-        product_id=product_id
-    ).first()
+        if not cart:
+            return Response({
+                "message": "Cart item not found"
+            }, status=404)
 
-    if not cart:
-        return Response({
-            "message": "Cart item not found"
-        }, status=404)
+        # Also here, we lock the product row to read a stable unit price during update.
+        product = Product.objects.select_for_update().filter(id=cart.product_id).first()
+        if not product:
+            return Response({
+                "message": "Product not found"
+            }, status=404)
 
-    if cart.quantity > 1:
-        cart.quantity -= 1
-        cart.price -= cart.product.price
-        cart.save()
-
-    else:
-        cart.delete()
+        if cart.quantity > 1:
+            Cart.objects.filter(id=cart.id).update(
+                quantity=F('quantity') - 1,
+                price=F('price') - product.price
+            )
+            cart.refresh_from_db()
+        else:
+            cart.delete()
 
     return Response({
         "message": "Quantity decreased"
