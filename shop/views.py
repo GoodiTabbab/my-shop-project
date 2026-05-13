@@ -754,32 +754,79 @@ def cart_destroy(request):
     })
 
 
+################
+# Before handing the race conditions
+# @api_view(['POST'])
+# @permission_classes([IsAuthenticated])
+# def increase_cart(request):
+#
+#     product_id = request.data.get('product_id')
+#
+#     cart = Cart.objects.filter(
+#         user=request.user,
+#         product_id=product_id
+#     ).first()
+#
+#     if not cart:
+#         return Response({
+#             "message": "Cart item not found"
+#         }, status=404)
+#
+#     # التحقق من الكمية المتوفرة
+#     if cart.quantity >= cart.product.quantity:
+#         return Response({
+#             "message": f"Sorry, only {cart.product.quantity} items available",
+#             "available_quantity": cart.product.quantity
+#         }, status=status.HTTP_400_BAD_REQUEST)
+#
+#     # زيادة الكمية
+#     cart.quantity += 1
+#     cart.price += cart.product.price
+#     cart.save()
+#
+#     return Response({
+#         "message": "Quantity increased",
+#         "cart": CartSerializer(cart).data
+#     })
 
+
+#After handing the race conditions
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def increase_cart(request):
 
     product_id = request.data.get('product_id')
+    with transaction.atomic():
+      # we lock the cart row for this user/product to serialize concurrent updates.
+        cart = Cart.objects.select_for_update().filter(
+            user=request.user,
+            product_id=product_id
+        ).first()
 
-    cart = Cart.objects.filter(
-        user=request.user,
-        product_id=product_id
-    ).first()
+        if not cart:
+            return Response({
+                "message": "Cart item not found"
+            }, status=404)
 
-    if not cart:
-        return Response({
-            "message": "Cart item not found"
-        }, status=404)
+        #  we lock the product row as well, so stock validation is race-safe.
+        product = Product.objects.select_for_update().filter(id=cart.product_id).first()
+        if not product:
+            return Response({
+                "message": "Product not found"
+            }, status=404)
 
-    if cart.quantity >= cart.product.quantity:
-        return Response({
-            "message": f"Sorry, only {cart.product.quantity} items available",
-            "available_quantity": cart.product.quantity
-        }, status=status.HTTP_400_BAD_REQUEST)
+        if cart.quantity >= product.quantity:
+            return Response({
+                "message": f"Sorry, only {product.quantity} items available",
+                "available_quantity": product.quantity
+            }, status=status.HTTP_400_BAD_REQUEST)
 
-    cart.quantity += 1
-    cart.price += cart.product.price
-    cart.save()
+        Cart.objects.filter(id=cart.id).update(
+            quantity=F('quantity') + 1,
+            price=F('price') + product.price
+        )
+
+        cart.refresh_from_db()
 
     return Response({
         "message": "Quantity increased",
@@ -816,6 +863,7 @@ def decrease_cart(request):
     return Response({
         "message": "Quantity decreased"
     })
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
