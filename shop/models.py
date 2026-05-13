@@ -85,12 +85,22 @@ class Order(models.Model):
         ('canceled', 'Canceled'),
     ]
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders')
+    idempotency_key = models.CharField(max_length=128, null=True, blank=True, db_index=True)  # to prevent duplicate orders on retries/double-submit (create_order method).
     cost = models.FloatField()
     state = models.CharField(max_length=20, choices=STATE_CHOICES, default='pending')
     location = models.CharField(max_length=255, blank=True, null=True)
     pay_status = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'idempotency_key'],
+                condition=models.Q(idempotency_key__isnull=False),
+                name='unique_order_user_idempotency_key',
+            )
+        ]
 
 # 7. Order Item Model
 class OrderItem(models.Model):
