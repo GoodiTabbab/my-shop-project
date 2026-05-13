@@ -18,21 +18,17 @@ class CustomUserManager(BaseUserManager):
         return self.create_user(phone_number, password, **extra_fields)
 
 class User(AbstractUser):
-    # الحقول الأساسية
     phone_number = models.CharField(max_length=20, unique=True)
     first_name = models.CharField(max_length=150, blank=True, null=True)
     last_name = models.CharField(max_length=150, blank=True, null=True)
     
-    # الحقول التي كانت تسبب نقصاً أو أخطاء
     location = models.CharField(max_length=255, blank=True, null=True)
     role = models.CharField(max_length=50, default='user')
     image = models.ImageField(upload_to='users/', blank=True, null=True)
     
-    # حقول إضافية للمستقبل (اختياري)
     email = models.EmailField(unique=True, blank=True, null=True)
     x_and_y = models.CharField(max_length=255, blank=True, null=True)
 
-    # إعدادات الهوية
     USERNAME_FIELD = 'phone_number'
     REQUIRED_FIELDS = [] # تركناها فارغة لأن التسجيل بالهاتف فقط
 
@@ -58,6 +54,7 @@ class Product(models.Model):
     quantity = models.IntegerField()
     price = models.FloatField() # يقابل double
     image = models.ImageField(upload_to='products/')
+    version = models.IntegerField(default=0)  # Optimistic locking token incremented on every successful update.
     # علاقة Many-to-Many مع المتجر
     stores = models.ManyToManyField(Store, related_name='products')
     created_at = models.DateTimeField(auto_now_add=True)
