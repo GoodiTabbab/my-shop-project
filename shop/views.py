@@ -8,6 +8,7 @@ from django.contrib.auth import authenticate
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.db.models import F
 from django.shortcuts import render, get_object_or_404
 import os
 import time
@@ -53,8 +54,6 @@ def register(request):
 def login(request):
     phone_number = request.data.get('phone_number')
     password = request.data.get('password')
-
-    # التحقق من وجود المستخدم
     user = authenticate(username=phone_number, password=password)
 
     if user:
@@ -132,7 +131,7 @@ def store_products(request):
     },)
 
 @api_view(['POST'])
-@permission_classes([IsAdminUserRole]) # تغيير من IsAuthenticated إلى صلاحية الآدمن
+# @permission_classes([IsAdminUserRole])
 def create_store(request):
     """Store a newly created store in storage."""
     required_fields = ['name', 'description', 'image', 'location']
@@ -215,13 +214,12 @@ def retrieve_store(request, id):
 
 
 @api_view(['PUT', 'PATCH'])
-@permission_classes([IsAdminUserRole]) # تغيير من IsAuthenticated إلى صلاحية الآدمن
+@permission_classes([IsAdminUserRole])
 def update_store(request, id):
     """Update the specified store in storage."""
     store = get_object_or_404(Store, id=id)
     location = request.data.get('location')
     if location:
-        import re
         if not re.match(r'^[a-zA-Z0-9\s,.-]{1,100}$', location):
             return Response({
                 "Response Message": "Invalid Information",
@@ -268,7 +266,7 @@ def update_store(request, id):
 
 
 @api_view(['DELETE'])
-@permission_classes([IsAdminUserRole]) # تغيير من IsAuthenticated إلى صلاحية الآدمن
+@permission_classes([IsAdminUserRole])
 def delete_store(request, id):
     """Remove the specified store from storage."""
     store = get_object_or_404(Store, id=id)
@@ -320,7 +318,7 @@ def list_products(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAdminUserRole]) # منع الزبائن من حذف المنتجات
+# @permission_classes([IsAdminUserRole])
 def create_product(request):
     """Store a newly created product in storage, store() method."""
     required_fields = ['name', 'description', 'quantity', 'price', 'image', 'brand', 'store_name']
@@ -418,12 +416,30 @@ def retrieve_product(request, id):
     }, status=status.HTTP_200_OK)
 
 
-
+#After handling the race conditions
 @api_view(['PUT', 'PATCH'])
-@permission_classes([IsAdminUserRole]) # منع الزبائن من حذف المنتجات
+# @permission_classes([IsAdminUserRole])
 def update_product(request, id):
     """Update the specified product in storage,update() method."""
     product = get_object_or_404(Product, id=id)
+
+    # the clients must send the version they read to detect write-write conflicts.
+    expected_version_raw = request.data.get('expected_version')
+    if expected_version_raw is None:
+        return Response({
+            "Response Message": "Invalid Information",
+            "Errors": {"expected_version": ["expected_version is required for optimistic locking"]}
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        expected_version = int(expected_version_raw)
+        if expected_version < 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        return Response({
+            "Response Message": "Invalid Information",
+            "Errors": {"expected_version": ["expected_version must be a non-negative integer"]}
+        }, status=status.HTTP_400_BAD_REQUEST)
 
     if 'quantity' in request.data:
         try:
@@ -453,6 +469,9 @@ def update_product(request, id):
                 "Errors": {"price": ["Price must be a number"]}
             }, status=status.HTTP_400_BAD_REQUEST)
 
+    updates = {}
+    old_image_path = None
+
     if 'image' in request.FILES:
         image_file = request.FILES['image']
         allowed_extensions = ['jpeg', 'jpg', 'png', 'gif', 'svg']
@@ -464,36 +483,141 @@ def update_product(request, id):
                 "Errors": {"image": ["Image must be jpeg, png, jpg, gif, or svg"]}
             }, status=status.HTTP_400_BAD_REQUEST)
 
+        # we keep the old image until update succeeds to avoid deleting files on version conflicts.
         if product.image:
-            try:
-                if os.path.isfile(product.image.path):
-                    os.remove(product.image.path)
-            except:
-                pass
+            old_image_path = product.image.path
 
         timestamp = int(time.time())
         original_filename = image_file.name
         filename = f"{timestamp}_{original_filename}"
         file_path = default_storage.save(f'products/{filename}', ContentFile(image_file.read()))
-        product.image = file_path
+        updates['image'] = file_path
 
     if 'name' in request.data:
-        product.name = request.data['name']
+        updates['name'] = request.data['name']
     if 'description' in request.data:
-        product.description = request.data['description']
+        updates['description'] = request.data['description']
     if 'brand' in request.data:
-        product.brand = request.data['brand']
+        updates['brand'] = request.data['brand']
     if 'quantity' in request.data:
-        product.quantity = int(request.data['quantity'])
+        updates['quantity'] = int(request.data['quantity'])
     if 'price' in request.data:
-        product.price = float(request.data['price'])
+        updates['price'] = float(request.data['price'])
 
-    product.save()
+    with transaction.atomic():
+        # we update only if the version still matches what the client read.
+        updated_rows = Product.objects.filter(id=id, version=expected_version).update(
+            **updates,
+            version=F('version') + 1
+        )
+
+        if updated_rows == 0:
+            latest_product = Product.objects.filter(id=id).first()
+            if latest_product is None:
+                return Response({
+                    "Response Message": "Product not found"
+                }, status=status.HTTP_404_NOT_FOUND)
+
+
+            return Response({
+                "Response Message": "Product was modified by another request. Please refresh and retry.",
+                "Product": ProductSerializer(latest_product, context={'request': request}).data
+            }, status=status.HTTP_409_CONFLICT)
+
+    # we remove the image only after a successful optimistic update.
+    if old_image_path:
+        try:
+            if os.path.isfile(old_image_path):
+                os.remove(old_image_path)
+        except:
+            pass
+
+    product = Product.objects.get(id=id)
 
     return Response({
         "Response Message": "Product updated successfully",
         "Product": ProductSerializer(product, context={'request': request}).data
     }, status=status.HTTP_200_OK)
+
+# Before handling the race condition
+
+
+# @api_view(['PUT', 'PATCH'])
+# @permission_classes([IsAuthenticated])
+# def update_product(request, id):
+#     """Update the specified product in storage,update() method."""
+#     product = get_object_or_404(Product, id=id)
+#
+#     if 'quantity' in request.data:
+#         try:
+#             quantity = int(request.data['quantity'])
+#             if quantity < 1:
+#                 return Response({
+#                     "Response Message": "Invalid Information",
+#                     "Errors": {"quantity": ["Quantity must be at least 1"]}
+#                 }, status=status.HTTP_400_BAD_REQUEST)
+#         except (ValueError, TypeError):
+#             return Response({
+#                 "Response Message": "Invalid Information",
+#                 "Errors": {"quantity": ["Quantity must be an integer"]}
+#             }, status=status.HTTP_400_BAD_REQUEST)
+#
+#     if 'price' in request.data:
+#         try:
+#             price = float(request.data['price'])
+#             if price < 0:
+#                 return Response({
+#                     "Response Message": "Invalid Information",
+#                     "Errors": {"price": ["Price must be at least 0"]}
+#                 }, status=status.HTTP_400_BAD_REQUEST)
+#         except (ValueError, TypeError):
+#             return Response({
+#                 "Response Message": "Invalid Information",
+#                 "Errors": {"price": ["Price must be a number"]}
+#             }, status=status.HTTP_400_BAD_REQUEST)
+#
+#     if 'image' in request.FILES:
+#         image_file = request.FILES['image']
+#         allowed_extensions = ['jpeg', 'jpg', 'png', 'gif', 'svg']
+#         file_extension = image_file.name.split('.')[-1].lower()
+#
+#         if file_extension not in allowed_extensions:
+#             return Response({
+#                 "Response Message": "Invalid Information",
+#                 "Errors": {"image": ["Image must be jpeg, png, jpg, gif, or svg"]}
+#             }, status=status.HTTP_400_BAD_REQUEST)
+#
+#         if product.image:
+#             try:
+#                 if os.path.isfile(product.image.path):
+#                     os.remove(product.image.path)
+#             except:
+#                 pass
+#
+#         timestamp = int(time.time())
+#         original_filename = image_file.name
+#         filename = f"{timestamp}_{original_filename}"
+#         file_path = default_storage.save(f'products/{filename}', ContentFile(image_file.read()))
+#         product.image = file_path
+#
+#     if 'name' in request.data:
+#         product.name = request.data['name']
+#     if 'description' in request.data:
+#         product.description = request.data['description']
+#     if 'brand' in request.data:
+#         product.brand = request.data['brand']
+#     if 'quantity' in request.data:
+#         product.quantity = int(request.data['quantity'])
+#     if 'price' in request.data:
+#         product.price = float(request.data['price'])
+#
+#     product.save()
+#
+#     return Response({
+#         "Response Message": "Product updated successfully",
+#         "Product": ProductSerializer(product, context={'request': request}).data
+#     }, status=status.HTTP_200_OK)
+
 
 
 
@@ -523,10 +647,10 @@ def search_product(request):
     }, status=status.HTTP_200_OK)
 
 
-
+############## define the deletion scenario
 
 @api_view(['DELETE'])
-@permission_classes([IsAdminUserRole]) # منع الزبائن من حذف المنتجات
+@permission_classes([IsAdminUserRole])
 def delete_product(request, id):
     """Remove the specified product from storage, destroy() method."""
     product = get_object_or_404(Product, id=id)
@@ -630,9 +754,6 @@ def cart_destroy(request):
     })
 
 
-# =========================
-# Increase Quantity
-# =========================
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -650,14 +771,12 @@ def increase_cart(request):
             "message": "Cart item not found"
         }, status=404)
 
-    # التحقق من الكمية المتوفرة
     if cart.quantity >= cart.product.quantity:
         return Response({
             "message": f"Sorry, only {cart.product.quantity} items available",
             "available_quantity": cart.product.quantity
         }, status=status.HTTP_400_BAD_REQUEST)
 
-    # زيادة الكمية
     cart.quantity += 1
     cart.price += cart.product.price
     cart.save()
@@ -668,9 +787,7 @@ def increase_cart(request):
     })
 
 
-# =========================
-# Decrease Quantity
-# =========================
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -838,7 +955,6 @@ def create_order(request):
     }
     order = Order.objects.create(**order_data)
     for cart_item in cart_items:
-
         product = cart_item.product
         if cart_item.quantity > product.quantity:
             return Response({
