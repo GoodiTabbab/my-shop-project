@@ -1022,42 +1022,152 @@ def order_details(request):
     }, status=status.HTTP_200_OK)
 
 
+#Before handing the race conditions and data integrity
 
+# @api_view(['POST'])
+# @permission_classes([IsAuthenticated])
+# def create_order(request):
+#     """Creating a new order from the user's cart. create() method."""
+#     user = request.user
+#     cart_items = Cart.objects.filter(user=user)
+#     if not cart_items.exists():
+#         return Response({
+#             "message": "Cannot create an order with an empty cart."
+#         }, status=status.HTTP_400_BAD_REQUEST)
+#     total_cost = sum(item.price for item in cart_items)
+#     order_data = {
+#         'user': user,
+#         'cost': total_cost,
+#         'state': 'pending',
+#         'pay_status': False,
+#         'location': request.data.get('location', '')
+#     }
+#     order = Order.objects.create(**order_data)
+#     for cart_item in cart_items:
+#         product = cart_item.product
+#         if cart_item.quantity > product.quantity:
+#             return Response({
+#                 "message": f"Sorry, only {product.quantity} left for {product.name}"
+#             }, status=status.HTTP_400_BAD_REQUEST)
+#         product.quantity -= cart_item.quantity
+#         product.save()
+#         OrderItem.objects.create(
+#             order=order,
+#             product=product,
+#             quantity=cart_item.quantity,
+#             price=cart_item.price
+#     )
+#
+#     cart_items.delete()
+#
+#     return Response({
+#         "Message": "Order Created Successfully",
+#         "Order": OrderSerializer(order, context={'request': request}).data
+#     }, status=status.HTTP_200_OK)
+
+
+
+
+
+#After handing the race conditions and data integrity
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def create_order(request):
     """Creating a new order from the user's cart. create() method."""
     user = request.user
-    cart_items = Cart.objects.filter(user=user)
-    if not cart_items.exists():
+    # require an idempotency key to prevent duplicate order creation
+    idempotency_key = request.headers.get('Idempotency-Key') or request.data.get('idempotency_key')
+    if not idempotency_key:
         return Response({
-            "message": "Cannot create an order with an empty cart."
+            "message": "Idempotency key is required (send Idempotency-Key header or idempotency_key field)."
         }, status=status.HTTP_400_BAD_REQUEST)
-    total_cost = sum(item.price for item in cart_items)
-    order_data = {
-        'user': user,
-        'cost': total_cost,
-        'state': 'pending',
-        'pay_status': False,
-        'location': request.data.get('location', '')
-    }
-    order = Order.objects.create(**order_data)
-    for cart_item in cart_items:
-        product = cart_item.product
-        if cart_item.quantity > product.quantity:
-            return Response({
-                "message": f"Sorry, only {product.quantity} left for {product.name}"
-            }, status=status.HTTP_400_BAD_REQUEST)
-        product.quantity -= cart_item.quantity
-        product.save()
-        OrderItem.objects.create(
-            order=order,
-            product=product,
-            quantity=cart_item.quantity,
-            price=cart_item.price
-    )
 
-    cart_items.delete()
+    # execute checkout as one atomic unit
+    with transaction.atomic():
+        # if this key already created an order for this user, return that order instead of duplicating.
+        existing_order = Order.objects.select_for_update().filter(
+            user=user,
+            idempotency_key=idempotency_key
+        ).first()
+        if existing_order:
+            return Response({
+                "Message": "Order already created for this idempotency key",
+                "Order": OrderSerializer(existing_order, context={'request': request}).data
+            }, status=status.HTTP_200_OK)
+
+        # lock this user's cart
+        cart_items = list(
+            Cart.objects.select_for_update().select_related('product').filter(user=user).order_by('id')
+        )
+        if not cart_items:
+            return Response({
+                "message": "Cannot create an order with an empty cart."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # aggregate the requested quantity per product to validate and deduct stock
+        requested_quantity_by_product = {}
+        for cart_item in cart_items:
+            requested_quantity_by_product[cart_item.product_id] = (
+                requested_quantity_by_product.get(cart_item.product_id, 0) + cart_item.quantity
+            )
+
+        product_ids = sorted(requested_quantity_by_product.keys())
+        products = list(Product.objects.select_for_update().filter(id__in=product_ids).order_by('id'))
+        product_by_id = {product.id: product for product in products}
+        if len(product_by_id) != len(product_ids):
+            return Response({
+                "message": "One or more products are no longer available."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        #  validate stock
+        for product_id in product_ids:
+            product = product_by_id[product_id]
+            requested_quantity = requested_quantity_by_product[product_id]
+            if requested_quantity > product.quantity:
+                return Response({
+                    "message": f"Sorry, only {product.quantity} left for {product.name}"
+                }, status=status.HTTP_409_CONFLICT)
+
+        # create the order
+        order = Order.objects.create(
+            user=user,
+            idempotency_key=idempotency_key,
+            cost=0,
+            state='pending',
+            pay_status=False,
+            location=request.data.get('location', '')
+        )
+
+        # deduct stock
+        for product_id in product_ids:
+            requested_quantity = requested_quantity_by_product[product_id]
+            updated_rows = Product.objects.filter(
+                id=product_id,
+                quantity__gte=requested_quantity
+            ).update(quantity=F('quantity') - requested_quantity)
+            if updated_rows == 0:
+                product = Product.objects.get(id=product_id)
+                return Response({
+                    "message": f"Sorry, only {product.quantity} left for {product.name}"
+                }, status=status.HTTP_409_CONFLICT)
+
+        #build order items and recompute total cost from locked product prices
+        total_cost = 0.0
+        for cart_item in cart_items:
+            product = product_by_id[cart_item.product_id]
+            line_total = float(product.price) * cart_item.quantity
+            total_cost += line_total
+            OrderItem.objects.create(
+                order=order,
+                product=product,
+                quantity=cart_item.quantity,
+                price=line_total
+            )
+
+        # persist final total and clear cart rows in the same transaction.
+        order.cost = total_cost
+        order.save(update_fields=['cost'])
+        Cart.objects.filter(id__in=[item.id for item in cart_items]).delete()
 
     return Response({
         "Message": "Order Created Successfully",
