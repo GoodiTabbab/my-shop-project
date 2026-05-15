@@ -416,7 +416,7 @@ def retrieve_product(request, id):
     }, status=status.HTTP_200_OK)
 
 
-#After handling the race conditions
+# After handling the race conditions
 @api_view(['PUT', 'PATCH'])
 # @permission_classes([IsAdminUserRole])
 def update_product(request, id):
@@ -737,9 +737,7 @@ def cart_index(request):
     })
 
 
-# =========================
-# Add Product To Cart
-# =========================
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -753,7 +751,7 @@ def cart_store(request):
         return Response({'message': 'Product not found'}, status=404)
 
     cart_item = Cart.objects.filter(user=request.user, product=product).first()
-    
+
     current_in_cart = cart_item.quantity if cart_item else 0
     total_requested_quantity = current_in_cart + quantity_to_add
 
@@ -806,78 +804,34 @@ def cart_destroy(request):
 
 
 ################
-# Before handing the race conditions
-# @api_view(['POST'])
-# @permission_classes([IsAuthenticated])
-# def increase_cart(request):
-#
-#     product_id = request.data.get('product_id')
-#
-#     cart = Cart.objects.filter(
-#         user=request.user,
-#         product_id=product_id
-#     ).first()
-#
-#     if not cart:
-#         return Response({
-#             "message": "Cart item not found"
-#         }, status=404)
-#
-#     # التحقق من الكمية المتوفرة
-#     if cart.quantity >= cart.product.quantity:
-#         return Response({
-#             "message": f"Sorry, only {cart.product.quantity} items available",
-#             "available_quantity": cart.product.quantity
-#         }, status=status.HTTP_400_BAD_REQUEST)
-#
-#     # زيادة الكمية
-#     cart.quantity += 1
-#     cart.price += cart.product.price
-#     cart.save()
-#
-#     return Response({
-#         "message": "Quantity increased",
-#         "cart": CartSerializer(cart).data
-#     })
 
-
-#After handing the race conditions
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def increase_cart(request):
 
     product_id = request.data.get('product_id')
-    with transaction.atomic():
-      # we lock the cart row for this user/product to serialize concurrent updates.
-        cart = Cart.objects.select_for_update().filter(
-            user=request.user,
-            product_id=product_id
-        ).first()
 
-        if not cart:
-            return Response({
-                "message": "Cart item not found"
-            }, status=404)
+    cart = Cart.objects.filter(
+        user=request.user,
+        product_id=product_id
+    ).first()
 
-        #  we lock the product row as well, so stock validation is race-safe.
-        product = Product.objects.select_for_update().filter(id=cart.product_id).first()
-        if not product:
-            return Response({
-                "message": "Product not found"
-            }, status=404)
+    if not cart:
+        return Response({
+            "message": "Cart item not found"
+        }, status=404)
 
-        if cart.quantity >= product.quantity:
-            return Response({
-                "message": f"Sorry, only {product.quantity} items available",
-                "available_quantity": product.quantity
-            }, status=status.HTTP_400_BAD_REQUEST)
+    # التحقق من الكمية المتوفرة
+    if cart.quantity >= cart.product.quantity:
+        return Response({
+            "message": f"Sorry, only {cart.product.quantity} items available",
+            "available_quantity": cart.product.quantity
+        }, status=status.HTTP_400_BAD_REQUEST)
 
-        Cart.objects.filter(id=cart.id).update(
-            quantity=F('quantity') + 1,
-            price=F('price') + product.price
-        )
-
-        cart.refresh_from_db()
+    # زيادة الكمية
+    cart.quantity += 1
+    cart.price += cart.product.price
+    cart.save()
 
     return Response({
         "message": "Quantity increased",
@@ -885,75 +839,37 @@ def increase_cart(request):
     })
 
 
-#Before handling the race conditions
-# @api_view(['POST'])
-# @permission_classes([IsAuthenticated])
-# def decrease_cart(request):
-#
-#     product_id = request.data.get('product_id')
-#
-#     cart = Cart.objects.filter(
-#         user=request.user,
-#         product_id=product_id
-#     ).first()
-#
-#     if not cart:
-#         return Response({
-#             "message": "Cart item not found"
-#         }, status=404)
-#
-#     if cart.quantity > 1:
-#         cart.quantity -= 1
-#         cart.price -= cart.product.price
-#         cart.save()
-#
-#     else:
-#         cart.delete()
-#
-#     return Response({
-#         "message": "Quantity decreased"
-#     })
 
 
-
-
-#After handling the race conditions
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def decrease_cart(request):
-    #we follow the same approach as increasing the cart quantity
+
     product_id = request.data.get('product_id')
-    with transaction.atomic():
-        # we lock the cart row to serialize concurrent decrease requests.
-        cart = Cart.objects.select_for_update().filter(
-            user=request.user,
-            product_id=product_id
-        ).first()
 
-        if not cart:
-            return Response({
-                "message": "Cart item not found"
-            }, status=404)
+    cart = Cart.objects.filter(
+        user=request.user,
+        product_id=product_id
+    ).first()
 
-        # Also here, we lock the product row to read a stable unit price during update.
-        product = Product.objects.select_for_update().filter(id=cart.product_id).first()
-        if not product:
-            return Response({
-                "message": "Product not found"
-            }, status=404)
+    if not cart:
+        return Response({
+            "message": "Cart item not found"
+        }, status=404)
 
-        if cart.quantity > 1:
-            Cart.objects.filter(id=cart.id).update(
-                quantity=F('quantity') - 1,
-                price=F('price') - product.price
-            )
-            cart.refresh_from_db()
-        else:
-            cart.delete()
+    if cart.quantity > 1:
+        cart.quantity -= 1
+        cart.price -= cart.product.price
+        cart.save()
+
+    else:
+        cart.delete()
 
     return Response({
         "message": "Quantity decreased"
     })
+
+
 
 
 @api_view(['POST'])
