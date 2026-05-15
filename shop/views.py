@@ -416,7 +416,7 @@ def retrieve_product(request, id):
     }, status=status.HTTP_200_OK)
 
 
-# After handling the race conditions
+# After handling the race conditions#########################################################
 @api_view(['PUT', 'PATCH'])
 # @permission_classes([IsAdminUserRole])
 def update_product(request, id):
@@ -541,7 +541,6 @@ def update_product(request, id):
 
 # Before handling the race condition
 
-
 # @api_view(['PUT', 'PATCH'])
 # @permission_classes([IsAuthenticated])
 # def update_product(request, id):
@@ -647,7 +646,7 @@ def search_product(request):
     }, status=status.HTTP_200_OK)
 
 
-############## define the deletion scenario
+
 #Before the race conditions handling
 
 @api_view(['DELETE'])
@@ -711,6 +710,19 @@ def delete_product(request, id):
         "removed_from_stores": removed_from_stores
     }, status=status.HTTP_200_OK)
 
+
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_product(request, id):
+    """Remove the specified product from storage, destroy() method."""
+    product = get_object_or_404(Product, id=id)
+    product.delete()
+
+    return Response({
+        "Message : ": "Deleted Successfully"
+    }, status=status.HTTP_200_OK)
 
 
 # =========================
