@@ -1,4 +1,3 @@
-import asyncio
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -849,7 +848,6 @@ def create_order(request):
         "Message": "Order Created Successfully",
         "Order": OrderSerializer(order, context={'request': request}).data
     }, status=status.HTTP_200_OK)
-
 
 
 #######??????? what is the difference between this one and index() or list_orders_pending()?
