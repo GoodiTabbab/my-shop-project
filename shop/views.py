@@ -1,3 +1,4 @@
+
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
@@ -10,6 +11,7 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import F
 from django.shortcuts import render, get_object_or_404
+from .tasks import send_order_notification
 import os
 import time
 import re
@@ -1048,22 +1050,34 @@ def order_details(request):
 
 
 
-#After handing the race conditions and data integrity
+from django.db import transaction
+from django.db.models import F
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from .models import Cart, Product, Order, OrderItem
+from .serializers import OrderSerializer
+# استيراد مهمة الكرفس التي أضافتها بانا لإرسال الإيميلات
+from core.tasks import send_order_notification  
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def create_order(request):
-    """Creating a new order from the user's cart. create() method."""
+    """Creating a new order from the user's cart securely with race condition prevention."""
     user = request.user
-    # require an idempotency key to prevent duplicate order creation
+    
+    # 1. التحقق من وجود مفتاح تكرار الطلب (Idempotency Key) لمنع الطلبات المكررة
     idempotency_key = request.headers.get('Idempotency-Key') or request.data.get('idempotency_key')
     if not idempotency_key:
         return Response({
             "message": "Idempotency key is required (send Idempotency-Key header or idempotency_key field)."
         }, status=status.HTTP_400_BAD_REQUEST)
 
-    # execute checkout as one atomic unit
+    # 2. بدء عملية تفاعلية آمنة ومغلقة في قاعدة البيانات (Atomic Unit)
     with transaction.atomic():
-        # if this key already created an order for this user, return that order instead of duplicating.
+        
+        # منع تكرار الطلب في نفس الوقت عبر قفل السجل الحالي
         existing_order = Order.objects.select_for_update().filter(
             user=user,
             idempotency_key=idempotency_key
@@ -1074,7 +1088,7 @@ def create_order(request):
                 "Order": OrderSerializer(existing_order, context={'request': request}).data
             }, status=status.HTTP_200_OK)
 
-        # lock this user's cart
+        # قفل عناصر العربة الخاصة بالمستخدم لمنع التعديل عليها أثناء المعالجة
         cart_items = list(
             Cart.objects.select_for_update().select_related('product').filter(user=user).order_by('id')
         )
@@ -1083,22 +1097,24 @@ def create_order(request):
                 "message": "Cannot create an order with an empty cart."
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # aggregate the requested quantity per product to validate and deduct stock
+        # تجميع الكميات المطلوبة لكل منتج (في حال تكرر المنتج في العربة)
         requested_quantity_by_product = {}
         for cart_item in cart_items:
             requested_quantity_by_product[cart_item.product_id] = (
                 requested_quantity_by_product.get(cart_item.product_id, 0) + cart_item.quantity
             )
 
+        # جلب المنتجات وقفل سجلاتها في قاعدة البيانات لمنع عمليات الشراء المتزامنة الأخرى (Race Condition)
         product_ids = sorted(requested_quantity_by_product.keys())
         products = list(Product.objects.select_for_update().filter(id__in=product_ids).order_by('id'))
         product_by_id = {product.id: product for product in products}
+        
         if len(product_by_id) != len(product_ids):
             return Response({
                 "message": "One or more products are no longer available."
             }, status=status.HTTP_404_NOT_FOUND)
 
-        #  validate stock
+        # التحقق الأولي من توفر الكميات الكافية في المخزون
         for product_id in product_ids:
             product = product_by_id[product_id]
             requested_quantity = requested_quantity_by_product[product_id]
@@ -1107,7 +1123,7 @@ def create_order(request):
                     "message": f"Sorry, only {product.quantity} left for {product.name}"
                 }, status=status.HTTP_409_CONFLICT)
 
-        # create the order
+        # إنشاء سجل الطلب الأساسي بتكلفة مبدئية صفر وحالة معلقة
         order = Order.objects.create(
             user=user,
             idempotency_key=idempotency_key,
@@ -1117,25 +1133,28 @@ def create_order(request):
             location=request.data.get('location', '')
         )
 
-        # deduct stock
+        # خصم الكميات من المخزون مباشرة عبر قاعدة البيانات باستخدام التعبيرات الدقيقة (F Expression) حمايةً للبيانات
         for product_id in product_ids:
             requested_quantity = requested_quantity_by_product[product_id]
             updated_rows = Product.objects.filter(
                 id=product_id,
                 quantity__gte=requested_quantity
             ).update(quantity=F('quantity') - requested_quantity)
+            
+            # إذا فشل التحديث (بسبب شراء شخص آخر للكمية في نفس اللحظة)
             if updated_rows == 0:
                 product = Product.objects.get(id=product_id)
                 return Response({
                     "message": f"Sorry, only {product.quantity} left for {product.name}"
                 }, status=status.HTTP_409_CONFLICT)
 
-        #build order items and recompute total cost from locked product prices
+        # إنشاء عناصر الطلب (OrderItems) وحساب التكلفة الإجمالية الحقيقية
         total_cost = 0.0
         for cart_item in cart_items:
             product = product_by_id[cart_item.product_id]
             line_total = float(product.price) * cart_item.quantity
             total_cost += line_total
+            
             OrderItem.objects.create(
                 order=order,
                 product=product,
@@ -1143,17 +1162,21 @@ def create_order(request):
                 price=line_total
             )
 
-        # persist final total and clear cart rows in the same transaction.
+        # تحديث التكلفة النهائية وحفظ الطلب
         order.cost = total_cost
         order.save(update_fields=['cost'])
+        
+        # تفريغ عربة التسوق للمستخدم بنجاح تام بعد انتهاء الجرد والخصم
         Cart.objects.filter(id__in=[item.id for item in cart_items]).delete()
 
+    # 3. خارج الـ Transaction: استدعاء دالة Celery التي أضافتها بانا لإرسال إيميل التأكيد بالخلفية
+    send_order_notification.delay(order.id, user.email)
+
+    # 4. إرجاع الرد النهائي الناجح للمستخدم
     return Response({
         "Message": "Order Created Successfully",
         "Order": OrderSerializer(order, context={'request': request}).data
     }, status=status.HTTP_200_OK)
-
-
 #######??????? what is the difference between this one and index() or list_orders_pending()?
 @api_view(['GET'])
 @permission_classes([IsAdminUserRole]) # منع الزبائن من حذف المنتجات

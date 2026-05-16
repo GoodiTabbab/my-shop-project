@@ -6,6 +6,7 @@ from django.conf.urls.static import static
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('shop.urls')), # هذا السطر هو الأهم لربط الـ API
+    path('', include('django_prometheus.urls')),
 ]
 
 # إضافة مسار الصور (Media)
