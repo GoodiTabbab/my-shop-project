@@ -130,3 +130,21 @@ class WalletTransaction(models.Model):
 
     def __str__(self):
         return f"{self.transaction_type} - {self.amount} - {self.wallet.user.username}"    
+
+
+class DailyAuditLog(models.Model):
+    audit_date = models.DateTimeField(auto_now_add=True, verbose_name="Audit Date & Time")
+    method_used = models.CharField(max_length=50, verbose_name="Processing Method")
+    total_orders_processed = models.IntegerField(verbose_name="Total Orders Processed")
+    total_sales_amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="Total Sales Amount")
+    execution_time = models.FloatField(verbose_name="Execution Time (Seconds)")
+    ram_consumption = models.FloatField(verbose_name="RAM Consumption (MB)")
+    status = models.CharField(max_length=20, default="Success", verbose_name="Audit Status")
+
+    class Meta:
+        verbose_name = "Daily Audit Log"
+        verbose_name_plural = "Daily Audit Logs"
+        ordering = ['-audit_date']
+
+    def __str__(self):
+        return f"Audit {self.method_used} - {self.audit_date.strftime('%Y-%m-%d %H:%M')}"    
