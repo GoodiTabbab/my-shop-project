@@ -1,3 +1,4 @@
+
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
@@ -9,6 +10,7 @@ from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from django.db import transaction
 from django.shortcuts import render, get_object_or_404
+from .tasks import send_order_notification
 import os
 import time
 import re
@@ -837,7 +839,9 @@ def create_order(request):
             quantity=cart_item.quantity,
             price=cart_item.price
     )
-
+    send_order_notification.delay(order.id, user.email)
+    
+ # Simulate async operation
     cart_items.delete()
 
     return Response({
