@@ -836,8 +836,12 @@ def process_cart_item(cart_item, order):
 def create_order(request):
     """Creating a new order from the user's cart. create() method."""
     user = request.user
-    cart_items = Cart.objects.filter(user=user)
-    if not cart_items.exists():
+    # cart_items = Cart.objects.filter(user=user)
+    cart_items_qs = Cart.objects.filter(user=user).select_related('product')
+    cart_items = list(cart_items_qs)
+
+    # if not cart_items.exists():
+    if not cart_items:
         return Response({
             "message": "Cannot create an order with an empty cart."
         }, status=status.HTTP_400_BAD_REQUEST)
@@ -851,7 +855,7 @@ def create_order(request):
     }
     order = Order.objects.create(**order_data)
 
-    ## BANA COMMENTED THIS
+    # BANA COMMENTED THIS
     # for cart_item in cart_items:
 
     #     product = cart_item.product
@@ -868,9 +872,10 @@ def create_order(request):
     #         price=cart_item.price
     #     )
 
-    ## BANA ADDED
+    # BANA ADDED
     pool = get_pool()
-    futures = {pool.submit(process_cart_item, item, order): item for item in cart_items}
+    futures = {pool.submit(process_cart_item, item, order)
+                           : item for item in cart_items}
 
     errors = []
     for future in as_completed(futures):
@@ -887,7 +892,8 @@ def create_order(request):
     # send_order_notification.delay(order.id, user.email)
 
  # Simulate async operation
-    cart_items.delete()
+    # cart_items.delete()
+    cart_items_qs.delete()
 
     return Response({
         "Message": "Order Created Successfully",
