@@ -1,7 +1,7 @@
 from shop.models import User, Store, Product, Cart, Order, OrderItem
 import os
 import random
-
+from django.db import connection
 # ─────────────────────────────────────────
 # Grab real image filenames from your folders
 # ─────────────────────────────────────────
@@ -35,7 +35,10 @@ Order.objects.all().delete()
 Cart.objects.all().delete()
 Product.objects.all().delete()
 Store.objects.all().delete()
+with connection.cursor() as cursor:
+    cursor.execute("DELETE FROM shop_wallet")
 User.objects.filter(is_superuser=False).delete()
+
 
 # ─────────────────────────────────────────
 # STEP 2 — Create 20 users
@@ -117,6 +120,11 @@ product_data = [
     ('Yoga Mat',            'Non-slip eco-friendly yoga mat',
      'Gaiam',     700,  29.99),
 ]
+
+
+with connection.cursor() as cursor:
+    cursor.execute(
+        "ALTER TABLE shop_product MODIFY COLUMN version INT NOT NULL DEFAULT 0")
 
 products = []
 for i, (name, desc, brand, qty, price) in enumerate(product_data):

@@ -11,14 +11,16 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 from django.shortcuts import render, get_object_or_404
 from .tasks import send_order_notification
+from concurrent.futures import as_completed
+from shop.thread_pool import get_pool
 import os
 import time
 import re
 
-from .models import Cart, Product,Favorite, Store, Order, OrderItem
+from .models import Cart, Product, Favorite, Store, Order, OrderItem
 from .serializers import CartSerializer
 
-from .serializers import UserSerializer, StoreSerializer, StoreWithProductsSerializer, ProductSerializer, OrderSerializer,OrderItemSerializer,FavoriteSerializer
+from .serializers import UserSerializer, StoreSerializer, StoreWithProductsSerializer, ProductSerializer, OrderSerializer, OrderItemSerializer, FavoriteSerializer
 
 
 # 1. Register
@@ -37,6 +39,8 @@ def register(request):
     return Response({"Errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
 # 2. Login
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login(request):
@@ -57,6 +61,8 @@ def login(request):
     return Response({"Response Message": "Wrong Password Or Phone Number"}, status=status.HTTP_400_BAD_REQUEST)
 
 # 3. Personal Information (Update Profile)
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def personal_information(request):
@@ -73,6 +79,8 @@ def personal_information(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 # 4. Profile Data (Me)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def me(request):
@@ -85,13 +93,13 @@ def me(request):
 # views.py
 
 
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def list_stores(request):
     """Display a listing of the stores"""
     stores = Store.objects.all()
-    serializer = StoreSerializer(stores, many=True, context={'request': request})
+    serializer = StoreSerializer(
+        stores, many=True, context={'request': request})
 
     return Response({
         "message": "Stores retrieved successfully",
@@ -111,12 +119,14 @@ def store_products(request):
         }, status=status.HTTP_400_BAD_REQUEST)
 
     store = get_object_or_404(Store, name=store_name)
-    serializer = StoreWithProductsSerializer(store, context={'request': request})
+    serializer = StoreWithProductsSerializer(
+        store, context={'request': request})
 
     return Response({
         "message": f"Store {store_name} products retrieved successfully",
         "products": serializer.data['products']
     },)
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -164,7 +174,8 @@ def create_store(request):
         timestamp = int(time.time())
         original_filename = image_file.name
         filename = f"{timestamp}_{original_filename}"
-        file_path = default_storage.save(f'stores/{filename}', ContentFile(image_file.read()))
+        file_path = default_storage.save(
+            f'stores/{filename}', ContentFile(image_file.read()))
 
         store = Store.objects.create(
             name=store_data['name'],
@@ -185,8 +196,6 @@ def create_store(request):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def retrieve_store(request, id):
@@ -198,7 +207,6 @@ def retrieve_store(request, id):
         "Response Message": "Store retrieved successfully",
         "Store": serializer.data
     }, status=status.HTTP_200_OK)
-
 
 
 @api_view(['PUT', 'PATCH'])
@@ -236,7 +244,8 @@ def update_store(request, id):
         timestamp = int(time.time())
         original_filename = image_file.name
         filename = f"{timestamp}_{original_filename}"
-        file_path = default_storage.save(f'stores/{filename}', ContentFile(image_file.read()))
+        file_path = default_storage.save(
+            f'stores/{filename}', ContentFile(image_file.read()))
         store.image = file_path
 
     if 'name' in request.data:
@@ -296,7 +305,8 @@ def search_store(request):
 def list_products(request):
     """Display a listing of the products,index() method."""
     products = Product.objects.all()
-    serializer = ProductSerializer(products, many=True, context={'request': request})
+    serializer = ProductSerializer(
+        products, many=True, context={'request': request})
 
     return Response({
         "message": "Products retrieved successfully",
@@ -304,13 +314,12 @@ def list_products(request):
     }, status=status.HTTP_200_OK)
 
 
-
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def create_product(request):
     """Store a newly created product in storage, store() method."""
-    required_fields = ['name', 'description', 'quantity', 'price', 'image', 'brand', 'store_name']
+    required_fields = ['name', 'description', 'quantity',
+                       'price', 'image', 'brand', 'store_name']
     for field in required_fields:
         if field not in request.data:
             return Response({
@@ -367,7 +376,8 @@ def create_product(request):
         timestamp = int(time.time())
         original_filename = image_file.name
         filename = f"{timestamp}_{original_filename}"
-        file_path = default_storage.save(f'products/{filename}', ContentFile(image_file.read()))
+        file_path = default_storage.save(
+            f'products/{filename}', ContentFile(image_file.read()))
 
         product = Product.objects.create(
             name=request.data['name'],
@@ -403,7 +413,6 @@ def retrieve_product(request, id):
         "Response Message": "Product retrieved successfully",
         "Product": serializer.data
     }, status=status.HTTP_200_OK)
-
 
 
 @api_view(['PUT', 'PATCH'])
@@ -461,7 +470,8 @@ def update_product(request, id):
         timestamp = int(time.time())
         original_filename = image_file.name
         filename = f"{timestamp}_{original_filename}"
-        file_path = default_storage.save(f'products/{filename}', ContentFile(image_file.read()))
+        file_path = default_storage.save(
+            f'products/{filename}', ContentFile(image_file.read()))
         product.image = file_path
 
     if 'name' in request.data:
@@ -481,7 +491,6 @@ def update_product(request, id):
         "Response Message": "Product updated successfully",
         "Product": ProductSerializer(product, context={'request': request}).data
     }, status=status.HTTP_200_OK)
-
 
 
 @api_view(['GET'])
@@ -510,8 +519,6 @@ def search_product(request):
     }, status=status.HTTP_200_OK)
 
 
-
-
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
 def delete_product(request, id):
@@ -522,7 +529,6 @@ def delete_product(request, id):
     return Response({
         "Message : ": "Deleted Successfully"
     }, status=status.HTTP_200_OK)
-
 
 
 # =========================
@@ -565,7 +571,7 @@ def cart_store(request):
         return Response({'message': 'Product not found'}, status=404)
 
     cart_item = Cart.objects.filter(user=request.user, product=product).first()
-    
+
     current_in_cart = cart_item.quantity if cart_item else 0
     total_requested_quantity = current_in_cart + quantity_to_add
 
@@ -687,6 +693,7 @@ def decrease_cart(request):
         "message": "Quantity decreased"
     })
 
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def add_product_favorite(request):
@@ -725,6 +732,7 @@ def add_product_favorite(request):
         "message": "Product added to favorites",
         "status": True
     })
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -770,13 +778,15 @@ def delete_product_favorite(request):
         "status": True
     })
 
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def list_user_orders(request):
     """Lis the user's orders. index1() method."""
     user = request.user
     orders = Order.objects.filter(user=user)
-    serializer = OrderSerializer(orders, many=True, context={'request': request})
+    serializer = OrderSerializer(
+        orders, many=True, context={'request': request})
 
     return Response({
         "Message": "Orders Retrieved Successfully",
@@ -796,13 +806,29 @@ def order_details(request):
 
     order = get_object_or_404(Order, id=order_id)
     order_items = order.items.all()
-    serializer = OrderItemSerializer(order_items, many=True, context={'request': request})
+    serializer = OrderItemSerializer(
+        order_items, many=True, context={'request': request})
 
     return Response({
         "Items": serializer.data,
         "Message : ": "Retrieved Successfully"
     }, status=status.HTTP_200_OK)
 
+
+# BANA 2ND REQUIREMENT
+def process_cart_item(cart_item, order):
+    product = cart_item.product
+    if cart_item.quantity > product.quantity:
+        raise ValueError(
+            f"Sorry, only {product.quantity} left for {product.name}")
+    product.quantity -= cart_item.quantity
+    product.save()
+    OrderItem.objects.create(
+        order=order,
+        product=product,
+        quantity=cart_item.quantity,
+        price=cart_item.price
+    )
 
 
 @api_view(['POST'])
@@ -824,23 +850,42 @@ def create_order(request):
         'location': request.data.get('location', '')
     }
     order = Order.objects.create(**order_data)
-    for cart_item in cart_items:
 
-        product = cart_item.product
-        if cart_item.quantity > product.quantity:
-            return Response({
-                "message": f"Sorry, only {product.quantity} left for {product.name}"
-            }, status=status.HTTP_400_BAD_REQUEST)
-        product.quantity -= cart_item.quantity
-        product.save()
-        OrderItem.objects.create(
-            order=order,
-            product=product,
-            quantity=cart_item.quantity,
-            price=cart_item.price
-    )
-    send_order_notification.delay(order.id, user.email)
-    
+    ## BANA COMMENTED THIS
+    # for cart_item in cart_items:
+
+    #     product = cart_item.product
+    #     if cart_item.quantity > product.quantity:
+    #         return Response({
+    #             "message": f"Sorry, only {product.quantity} left for {product.name}"
+    #         }, status=status.HTTP_400_BAD_REQUEST)
+    #     product.quantity -= cart_item.quantity
+    #     product.save()
+    #     OrderItem.objects.create(
+    #         order=order,
+    #         product=product,
+    #         quantity=cart_item.quantity,
+    #         price=cart_item.price
+    #     )
+
+    ## BANA ADDED
+    pool = get_pool()
+    futures = {pool.submit(process_cart_item, item, order): item for item in cart_items}
+
+    errors = []
+    for future in as_completed(futures):
+        try:
+            future.result()
+        except ValueError as e:
+            errors.append(str(e))
+
+    if errors:
+        order.delete()
+        return Response({"message": errors[0]}, status=status.HTTP_400_BAD_REQUEST)
+
+    # JUDY
+    # send_order_notification.delay(order.id, user.email)
+
  # Simulate async operation
     cart_items.delete()
 
@@ -850,13 +895,14 @@ def create_order(request):
     }, status=status.HTTP_200_OK)
 
 
-#######??????? what is the difference between this one and index() or list_orders_pending()?
+# ??????? what is the difference between this one and index() or list_orders_pending()?
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def list_pending_orders(request):
     """listing of pending orders (alternative endpoint),show() method"""
     orders = Order.objects.filter(state='pending')
-    serializer = OrderSerializer(orders, many=True, context={'request': request})
+    serializer = OrderSerializer(
+        orders, many=True, context={'request': request})
 
     return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -866,7 +912,8 @@ def list_pending_orders(request):
 def list_orders_pending(request):
     """to display a listing of pending orders, index() method."""
     orders = Order.objects.filter(state='pending')
-    serializer = OrderSerializer(orders, many=True, context={'request': request})
+    serializer = OrderSerializer(
+        orders, many=True, context={'request': request})
 
     return Response({
         "Message": "Orders Retrieved Successfully",
@@ -886,8 +933,6 @@ def update_order_status(request):
     }, status=status.HTTP_200_OK)
 
 
-
-
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
 def delete_order(request):
@@ -904,7 +949,6 @@ def delete_order(request):
     return Response({
         "Message": "Orders deleted Successfully"
     }, status=status.HTTP_200_OK)
-
 
 
 @api_view(['PUT', 'PATCH'])
@@ -927,7 +971,6 @@ def update_order_shipped(request):
     }, status=status.HTTP_200_OK)
 
 
-
 @api_view(['PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def update_order_delivered(request):
@@ -946,7 +989,6 @@ def update_order_delivered(request):
         "Message": "Orders Delivered Successfully",
         "Order": OrderSerializer(order, context={'request': request}).data
     }, status=status.HTTP_200_OK)
-
 
 
 @api_view(['POST'])
@@ -979,7 +1021,6 @@ def remove_product_from_order(request):
         "message": "Product removed from the order successfully.",
         "order": OrderSerializer(order, context={'request': request}).data
     }, status=status.HTTP_200_OK)
-
 
 
 @api_view(['POST'])
@@ -1030,7 +1071,6 @@ def increase_order_item(request):
     }, status=status.HTTP_200_OK)
 
 
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def decrease_order_item(request):
@@ -1072,11 +1112,3 @@ def decrease_order_item(request):
             "message": "Item removed from order",
             "Order": OrderSerializer(order, context={'request': request}).data
         }, status=status.HTTP_200_OK)
-
-
-
-
-
-
-
-

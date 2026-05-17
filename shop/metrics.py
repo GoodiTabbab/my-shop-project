@@ -18,6 +18,12 @@ RAM_USAGE = Gauge(
     'Django process RAM usage percentage'
 )
 
+
+RAM_BYTES = Gauge(
+    'django_memory_usage_mb',
+    'Django process RAM usage in MB'
+)
+
 # Get the current Django process only
 _process = psutil.Process(os.getpid())
 
@@ -26,3 +32,4 @@ def update_system_metrics():
     THREAD_COUNT.set(threading.active_count())
     CPU_USAGE.set(_process.cpu_percent())
     RAM_USAGE.set(_process.memory_percent())
+    RAM_BYTES.set(_process.memory_info().rss / 1024 / 1024)
