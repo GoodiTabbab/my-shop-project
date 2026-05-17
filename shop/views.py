@@ -416,7 +416,7 @@ def retrieve_product(request, id):
     }, status=status.HTTP_200_OK)
 
 
-# After handling the race conditions#########################################################
+# After handling the race conditions#######################
 @api_view(['PUT', 'PATCH'])
 # @permission_classes([IsAdminUserRole])
 def update_product(request, id):
@@ -539,6 +539,9 @@ def update_product(request, id):
         "Product": ProductSerializer(product, context={'request': request}).data
     }, status=status.HTTP_200_OK)
 
+
+
+
 # Before handling the race condition
 
 # @api_view(['PUT', 'PATCH'])
@@ -647,8 +650,7 @@ def search_product(request):
 
 
 
-#Before the race conditions handling
-
+# After handling the race conditions
 @api_view(['DELETE'])
 @permission_classes([IsAdminUserRole])
 def delete_product(request, id):
@@ -712,17 +714,19 @@ def delete_product(request, id):
 
 
 
+# Before the race conditions handling
 
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
-def delete_product(request, id):
-    """Remove the specified product from storage, destroy() method."""
-    product = get_object_or_404(Product, id=id)
-    product.delete()
+# @api_view(['DELETE'])
+# @permission_classes([IsAuthenticated])
+# def delete_product(request, id):
+#     """Remove the specified product from storage, destroy() method."""
+#     product = get_object_or_404(Product, id=id)
+#     product.delete()
+#
+#     return Response({
+#         "Message : ": "Deleted Successfully"
+#     }, status=status.HTTP_200_OK)
 
-    return Response({
-        "Message : ": "Deleted Successfully"
-    }, status=status.HTTP_200_OK)
 
 
 # =========================
@@ -1028,6 +1032,9 @@ def order_details(request):
 #             return Response({
 #                 "message": f"Sorry, only {product.quantity} left for {product.name}"
 #             }, status=status.HTTP_400_BAD_REQUEST)
+#         print(f"User {request.user.phone_number} passed validation")
+#         time.sleep(3)
+#         print(f"User {request.user.phone_number} updating quantity")
 #         product.quantity -= cart_item.quantity
 #         product.save()
 #         OrderItem.objects.create(
@@ -1124,11 +1131,14 @@ def create_order(request):
                 id=product_id,
                 quantity__gte=requested_quantity
             ).update(quantity=F('quantity') - requested_quantity)
+            product.refresh_from_db()
+            print("NEW QUANTITY =", product.quantity)
             if updated_rows == 0:
                 product = Product.objects.get(id=product_id)
                 return Response({
                     "message": f"Sorry, only {product.quantity} left for {product.name}"
                 }, status=status.HTTP_409_CONFLICT)
+            product_by_id[product_id].refresh_from_db()
 
         #build order items and recompute total cost from locked product prices
         total_cost = 0.0
@@ -1181,50 +1191,52 @@ def update_order_status(request):
 # @permission_classes([IsAuthenticated])
 # def cancel_order(request, order_id):
 #     order = get_object_or_404(Order, id=order_id, user=request.user)
-#
-#     # 1. التأكد من حالة الطلب
 #     if order.state in ['shipped', 'delivered', 'canceled']:
-#         return Response({"error": "لا يمكن إلغاء هذا الطلب في حالته الحالية"}, status=400)
+#         return Response(
+#             {"error": "Cannot cancel the order with this state"},
+#             status=400
+#         )
 #
 #     try:
-#         with transaction.atomic():
-#             # 2. جلب المحفظة بأمان
-#             try:
-#                 wallet = request.user.wallet
-#             except:
-#                 return Response({"error": "لا توجد محفظة مرتبطة بهذا الحساب"}, status=404)
+#         try:
+#             wallet = request.user.wallet
+#         except:
+#             return Response(
+#                 {"error": "No wallet assigned to this account"},
+#                 status=404
+#             )
 #
-#             # 3. التحقق وإعادة المال (تأكد من اسم الحقل: هل هو cost أم total_price؟)
-#             if order.pay_status:
-#                 # استخدمنا Decimal و str للضمان، واستخدمنا total_price بناءً على الخطأ السابق
-#                 refund_amount = Decimal(str(order.cost))
-#                 wallet.balance += refund_amount
-#                 wallet.save()
+#         if order.pay_status:
+#             refund_amount = Decimal(str(order.cost))
+#             print(f"{request.user.phone_number} passed cancel validation")
+#             print(f"{request.user.phone_number} refunding wallet")
+#             wallet.balance += refund_amount
+#             wallet.save()
 #
-#                 # 4. سجل الترانزاكشن
-#                 WalletTransaction.objects.create(
-#                     wallet=wallet,
-#                     order=order,
-#                     amount=refund_amount,
-#                     transaction_type='refund',
-#                     description=f"إرجاع مبلغ الطلب الملغي رقم {order.id}"
-#                 )
-#             order_items = order.items.all()  # تأكد من أن related_name في موديل OrderItem هو 'items'
-#             for item in order_items:
-#                 product = item.product
-#                 product.quantity += item.quantity  # إعادة الكمية المخزنة
-#                 product.save()
-#             # 5. تحديث حالة الطلب
-#             order.state = 'canceled'
-#             order.pay_status = False
-#             order.save()
+#             WalletTransaction.objects.create(
+#                 wallet=wallet,
+#                 order=order,
+#                 amount=refund_amount,
+#                 transaction_type='refund',
+#                 description=f"refund the order {order.id}"
+#             )
 #
-#         return Response({"message": "تم إلغاء الطلب وإعادة المبلغ لمحفظتكم بنجاح"})
+#         order_items = order.items.all()
+#         for item in order_items:
+#             product = item.product
+#             product.quantity += item.quantity
+#             product.save()
+#
+#         order.state = 'canceled'
+#         order.pay_status = False
+#         order.save()
+#
+#         return Response({
+#             "message": "The order has been canceled and the amount has been refunded to your wallet"
+#         })
 #
 #     except Exception as e:
-#         # نصيحة: استبدل الرسالة العامة بـ str(e) أثناء التطوير لتعرف الخطأ بالضبط
-#         return Response({"error": f"حدث خطأ: {str(e)}"}, status=500)
-
+#         return Response({"error": f"error occurred: {str(e)}"}, status=500)
 
 
 
@@ -1234,41 +1246,56 @@ def update_order_status(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def cancel_order(request, order_id):
+    """cancel an order"""
     with transaction.atomic():
-        # lock the order
         order = Order.objects.select_for_update().filter(id=order_id, user=request.user).first()
         if not order:
             return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
         if order.state == 'canceled':
-            return Response({"message": "Order already canceled"})
+            return Response({"message": "Order already canceled"}, status=status.HTTP_200_OK)
         if order.state in ['shipped', 'delivered']:
-            return Response({"error": "Cannot cancel this order in its current state"}, status=status.HTTP_409_CONFLICT)
+            return Response(
+                {"error": f"Cannot cancel order in state '{order.state}'"},
+                status=status.HTTP_409_CONFLICT
+            )
 
-        # lock order items
-        order_items = list(order.items.select_for_update().select_related('product').order_by('id'))
-        restore_quantity_by_product = {}
+        order_items = list(
+            OrderItem.objects.select_for_update()
+                              .select_related('product')
+                              .filter(order=order)
+        )
+        if not order_items:
+            return Response({"error": "Order has no items to cancel"}, status=status.HTTP_400_BAD_REQUEST)
+        restore_qty_by_product = {}
         for item in order_items:
-            restore_quantity_by_product[item.product_id] = (restore_quantity_by_product.get(item.product_id, 0) + item.quantity)
+            restore_qty_by_product[item.product_id] = (
+                restore_qty_by_product.get(item.product_id, 0) + item.quantity
+            )
+        product_ids = sorted(restore_qty_by_product.keys())
+        # lock the involved product rows.
+        products = list(Product.objects.select_for_update().filter(id__in=product_ids))
+        if len(products) != len(product_ids):
+            return Response({"error": "One or more products no longer exist"}, status=status.HTTP_404_NOT_FOUND)
+        product_by_id = {p.id: p for p in products}
 
-        # lock product
-        product_ids = sorted(restore_quantity_by_product.keys())
-        products = list(Product.objects.select_for_update().filter(id__in=product_ids).order_by('id'))
-        product_by_id = {product.id: product for product in products}
-
-        # if the order was paid lock wallet and apply refund
+        # Refund wallet only if the order was paid
         if order.pay_status:
+            print(f"Processing refund for order #{order.id}, pay_status={order.pay_status}")
             wallet = Wallet.objects.select_for_update().filter(user=request.user).first()
             if not wallet:
                 return Response({"error": "No wallet linked to this account"}, status=status.HTTP_404_NOT_FOUND)
-
-            existing_refund = WalletTransaction.objects.select_for_update().filter(
+            
+            existing_refund = WalletTransaction.objects.filter(
                 wallet=wallet,
                 order=order,
                 transaction_type='refund'
             ).first()
-
-            if not existing_refund:
+            
+            if existing_refund:
+                print(f"Refund already exists for order #{order.id}, transaction #{existing_refund.id}")
+            else:
                 refund_amount = Decimal(str(order.cost))
+                print(f"Refunding {refund_amount} to wallet for order #{order.id}")
                 wallet.balance += refund_amount
                 wallet.save(update_fields=['balance'])
                 WalletTransaction.objects.create(
@@ -1278,15 +1305,19 @@ def cancel_order(request, order_id):
                     transaction_type='refund',
                     description=f"Refund for canceled order #{order.id}"
                 )
+                print(f"Refund transaction created successfully for order #{order.id}")
+        else:
+            print(f"Order #{order.id} was not paid (pay_status={order.pay_status}), skipping refund")
 
-        # restore stock
-        for product_id, restore_quantity in restore_quantity_by_product.items():
-            if product_id in product_by_id:
-                Product.objects.filter(id=product_id).update(quantity=F('quantity') + restore_quantity)
+        for product_id, qty in restore_qty_by_product.items():
+            Product.objects.filter(id=product_id).update(quantity=F('quantity') + qty)
+
         order.state = 'canceled'
         order.pay_status = False
         order.save(update_fields=['state', 'pay_status'])
-    return Response({"message": "Order canceled successfully and related changes applied"})
+
+    return Response({"message": "Order canceled successfully"})
+
 
 
 @api_view(['PUT', 'PATCH'])
@@ -1338,16 +1369,19 @@ def pay_order_by_wallet(request, order_id):
     order = get_object_or_404(Order, id=order_id, user=request.user)
     
     if order.pay_status:
-        return Response({"error": "الطلب مدفوع بالفعل"}, status=400)
+        return Response({"error": "Already paid"}, status=400)
 
     # استخدام transaction.atomic يضمن تنفيذ كل الخطوات أو فشلها جميعاً (حماية بيانات)
     try:
         with transaction.atomic():
             # قفل سجل المحفظة لمنع التضارب (Concurrency Handling)
             wallet = Wallet.objects.select_for_update().get(user=request.user)
+            print(f"{request.user.phone_number} locked wallet")
+
+            # time.sleep(3)
             
             if wallet.balance < order.cost:
-                return Response({"error": "رصيدك غير كافٍ"}, status=400)
+                return Response({"error": "Balance not enoughٍ"}, status=400)
 
             # 1. خصم الرصيد
             wallet.balance -= Decimal(str(order.cost))
@@ -1365,14 +1399,14 @@ def pay_order_by_wallet(request, order_id):
                 order=order,
                 amount=order.cost,
                 transaction_type='withdraw',
-                description=f"دفع قيمة الطلب رقم {order.id}"
+                description=f"Order with id {order.id} was paid successfully"
             )
 
-        return Response({"message": "تم الدفع وتسجيل العملية بنجاح"})
+        return Response({"message": "paid successfully"})
         
     except Exception as e:
-        print(str(e)) # هذا السطر سيطبع لك المشكلة الحقيقية في شاشة السوداء (Terminal)
-        return Response({"error": "حدث خطأ أثناء المعالجة، حاول لاحقاً"}, status=500)
+        print(str(e))
+        return Response({"error": "An error occurred, Try later "}, status=500)
 
 
 
