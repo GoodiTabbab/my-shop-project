@@ -165,3 +165,12 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     )
 }
+from django.db.backends.base.base import BaseDatabaseWrapper
+from django.db.backends.mysql.base import DatabaseFeatures
+
+# 1. إجبار دجانغو على تجاوز فحص تحديث قاعدة البيانات عند الإقلاع
+BaseDatabaseWrapper.check_database_version_supported = lambda self: None
+
+# 2. إجبار دجانغو على عدم استخدام ميزة RETURNING غير المتوافقة مع نسختك الحالية
+DatabaseFeatures.can_return_rows_from_bulk_insert = property(lambda self: False)
+DatabaseFeatures.can_return_columns_from_insert = property(lambda self: False)
