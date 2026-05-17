@@ -21,7 +21,7 @@ from shop.benchmarkers.run_thread_pool import run_with_thread_pool
 from shop.benchmarkers.run_workers import run_with_workers
 
 def generate_huge_data():
-    """Smart function to generate 50,000 dummy orders"""
+    """Smart function to generate 50,000 dummy orders with safe user fetch"""
     User = get_user_model()
     
     current_count = Order.objects.count()
@@ -29,17 +29,36 @@ def generate_huge_data():
     if current_count < 10000:
         print(f"⏳ Database contains only {current_count} orders.")
         
-        first_user = User.objects.first()
-        if not first_user:
-            print(" No user found. Creating a default tester admin...")
-            first_user = User.objects.create_user(username='tester_admin', password='password123')
+        # استخدام get_or_create لتجنب خطأ التكرار (Duplicate Entry)
+        first_user, created = User.objects.get_or_create(
+            username='tester_admin',
+            defaults={
+                'phone_number': '0912345678',
+                'is_active': True
+            }
+        )
+        
+        # إذا تم العثور عليه مسبقاً ولم يُنشأ الآن، نقوم بتعيين كلمة مروره احتياطياً إن لزم الأمر
+        if created:
+            first_user.set_password('password123')
+            first_user.save()
+            print(" Created a new default tester admin...")
+        else:
+            print(" Existing tester admin found and loaded successfully.")
             
         print(" Generating 50,000 dummy orders for stress testing... Please wait.")
         
-        bulk_orders = [Order(cost=150.00, user=first_user) for _ in range(50000)]
-        Order.objects.bulk_create(bulk_orders)
+        # جلب الحقول ديناميكياً لتجنب أخطاء أسما الحقول (cost أو total_amount)
+        order_field = 'cost' if hasattr(Order, 'cost') else 'total_price' if hasattr(Order, 'total_price') else 'total_amount'
         
-        print(f"✅ Data generated successfully! Total now: {Order.objects.count()} orders.")
+        bulk_orders = []
+        for _ in range(50000):
+            kwargs = {order_field: 150.00, 'user': first_user}
+            bulk_orders.append(Order(**kwargs))
+            
+        # تقسيم الإدخال إلى دفعات حجمها 5000 لتفادي قيود حجم الحزمة في MySQL
+        Order.objects.bulk_create(bulk_orders, batch_size=5000)        
+        print(f" Data generated successfully! Total now: {Order.objects.count()} orders.")
     else:
         print(f"📊 Database is ready with {current_count} orders.")
 
@@ -63,10 +82,10 @@ if __name__ == '__main__':
     
     scheduler = BlockingScheduler()
     
-    TARGET_HOUR = 10
-    TARGET_MINUTE = 25
+    TARGET_HOUR = 4
+    TARGET_MINUTE = 47
     
-    print(f"\n Scheduler is running... Tasks (Threads & Workers) scheduled daily at {TARGET_HOUR:02d}:{TARGET_MINUTE:02d} AM.")
+    print(f"\n Scheduler is running... Tasks (Threads & Workers) scheduled daily at {TARGET_HOUR:02d}:{TARGET_MINUTE:02d}.")
     print(" Leave this Terminal window open to run the scheduled background tasks...")
     
     scheduler.add_job(start_scheduled_benchmarks, 'cron', hour=TARGET_HOUR, minute=TARGET_MINUTE)

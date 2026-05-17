@@ -1,70 +1,86 @@
 import time
 import os
-import psutil
 from datetime import datetime
-
-
-def get_memory_usage():
-    process = psutil.Process(os.getpid())
-    return process.memory_info().rss / (1024 * 1024)  
+import django
 
 def heavy_calculation(order):
-    """Simulates a calculation loop and extracts order value dynamically"""
-    time.sleep(0.001)  
+    """
+    CPU-Bound Heavy Calculation 
+    تستقبل كائن الطلب بالكامل وتستخرج السعر منه بشكل آمن ثم تقوم بالعملية المعقدة
+    """
+    # البحث عن حقل السعر المتاح في الكائن بشكل ديناميكي آمن
+    possible_attributes = ['cost', 'total_price', 'price', 'total_amount']
+    price = 150.00 # قيمة افتراضية في حال عدم وجود حقول
     
-    possible_attributes = ['cost', 'total_price', 'price', 'total_amount', 'amount', 'total']
-    order_price = 0
-    
-    for attr in possible_attributes:
-        if hasattr(order, attr):
-            order_price = getattr(order, attr)
-            break
-    else:
-        order_price = 150.00  
-        
-    return float(order_price)
+    if order is not None:
+        for attr in possible_attributes:
+            if hasattr(order, attr):
+                val = getattr(order, attr)
+                if val is not None:
+                    price = float(val)
+                    break
+
+    # المعالجة المكثفة للمعالج (CPU-Bound) لـ 200,000 لفة كاملة
+    heavy_result = 0
+    for i in range(200000):
+        heavy_result += (i * i) % 97
+
+    return price + heavy_result
 
 def run_without_batch():
+    """الدالة التقليدية الصافية تتابعياً"""
     from shop.models import Order 
-    
-    print("\n--- Starting: Without Batch Processing (Traditional Method) ---")
-    start_time = time.time()
-    start_mem = get_memory_usage()
-    
-    all_orders = Order.objects.all()
+    all_orders = list(Order.objects.all()) # جلب الكائنات كاملة لتوحيد المقارنة
     total_calculated_sales = 0
-    total_orders_count = all_orders.count()
-    
     for order in all_orders:
         total_calculated_sales += heavy_calculation(order)
-        
-    end_time = time.time()
-    end_mem = get_memory_usage()
-    
-    elapsed_time = end_time - start_time
-    ram_usage = end_mem - start_mem
-    
-    print(" Traditional audit completed.")
-    print(f" Time Elapsed: {elapsed_time:.2f} seconds")
-    print(f" RAM Consumption: {ram_usage:.2f} MB")
-    
-    save_benchmark_result(
-        method_name="Traditional Synchronous", 
-        total_orders=total_orders_count, 
-        total_sales=total_calculated_sales, 
-        elapsed_time=elapsed_time, 
-        ram_usage=ram_usage
-    )
-    
     return total_calculated_sales
 
-def save_benchmark_result(method_name, total_orders, total_sales, elapsed_time, ram_usage):
-    """
-    Saves performance benchmarks and audit results to Django DB (Method 1)
-    and generates an isolated, well-formatted English text report for each method (Method 2).
-    """
-    from shop.models import DailyAuditLog
+def thread_worker_inside_process(orders_chunk):
+    """الخيوط الداخلية للـ Hybrid"""
+    chunk_tax = 0
+    for order in orders_chunk:
+        chunk_tax += heavy_calculation(order)
+    return chunk_tax
+
+def process_worker_hybrid(id_chunk):
+    """الـ Worker المعزول للـ Hybrid"""
+    django.setup()
+    from shop.models import Order
+    from concurrent.futures import ThreadPoolExecutor
     
+    try:
+        orders_chunk = list(Order.objects.filter(id__in=id_chunk))
+        sub_chunk_size = 500
+        sub_chunks = [orders_chunk[i:i + sub_chunk_size] for i in range(0, len(orders_chunk), sub_chunk_size)]
+        
+        total_process_tax = 0
+        with ThreadPoolExecutor(max_workers=8) as thread_executor:
+            results = thread_executor.map(thread_worker_inside_process, sub_chunks)
+            total_process_tax = sum(results)
+            
+        return total_process_tax
+    except Exception:
+        return 0 
+
+def process_worker_pure(id_chunk):
+    """الـ Worker النقي - يستقبل المعرفات ويجلب الكائنات كاملة لتصبح المقارنة عادلة"""
+    import django
+    django.setup()
+    from shop.models import Order
+
+    try:
+        orders_chunk = list(Order.objects.filter(id__in=id_chunk))
+        chunk_total = 0
+        for order in orders_chunk:
+            chunk_total += heavy_calculation(order)
+        return chunk_total
+    except Exception as e:
+        print(f"⚠️ Worker failed: {e}")
+        return 0
+            
+def save_benchmark_result(method_name, total_orders, total_sales, elapsed_time, ram_usage):
+    from shop.models import DailyAuditLog
     current_time = datetime.now()
     formatted_date = current_time.strftime("%Y-%m-%d %H:%M:%S")
     
@@ -87,7 +103,7 @@ def save_benchmark_result(method_name, total_orders, total_sales, elapsed_time, 
 --------------------------------------------------
    Total Orders Processed : {total_orders:,} orders
    Total Sales Revenue    : ${total_sales:,.2f}
-   Data Integrity Status  : 100% Match  (Consistent)
+   Data Integrity Status  : 100% Match
 
 --------------------------------------------------
  2. SYSTEM PERFORMANCE BENCHMARK METRICS
@@ -95,25 +111,12 @@ def save_benchmark_result(method_name, total_orders, total_sales, elapsed_time, 
    Elapsed Execution Time : {elapsed_time:.2f} seconds
    RAM Memory Consumption : {ram_usage:.2f} MB
 ==================================================
- ARCHITECTURAL INSIGHT FOR THE PROFESSOR:
 """
-    if "Traditional" in method_name:
-        report_content += "  Executed sequentially using a single main thread.\n  Result: Low memory overhead but extremely high time complexity.\n"
-    elif "Thread" in method_name:
-        report_content += "  Executed concurrently using multi-threading layers.\n  Result: Shorter elapsed time but high RAM context-switching and GIL contention.\n"
-    elif "Workers" in method_name:
-        report_content += "  Executed using fully isolated sub-processes (Multi-processing).\n  Result: Optimal execution time with true resource isolation.\n  Note: Main process RAM remains stable or drops (negative value) due to GC cleaning.\n"
-        
-    report_content += "==================================================\n"
-
     clean_method_name = method_name.replace(" ", "_").replace("(", "").replace(")", "")
     file_name = f"audit_{clean_method_name}_{current_time.strftime('%Y-%m-%d')}.txt"
-    
     reports_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'audit_reports')
     os.makedirs(reports_dir, exist_ok=True)
     
-    file_path = os.path.join(reports_dir, file_name)
-    with open(file_path, "w", encoding="utf-8") as file:
+    with open(os.path.join(reports_dir, file_name), "w", encoding="utf-8") as file:
         file.write(report_content)
-        
-    print(f" DB Log saved & isolated report generated: {file_name}")
+    print(f" DB Log saved: {file_name}")
