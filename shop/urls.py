@@ -41,16 +41,13 @@ urlpatterns = [
     path('products/search/', views.search_product, name='search_product'),
 
     # Order endpoints
-    path('orders/pending/', views.list_orders_pending, name='list_orders_pending'),
     path('orders/user/', views.list_user_orders, name='list_user_orders'),
     path('orders/details/', views.order_details, name='order_details'),
     path('orders/create/', views.create_order, name='create_order'),
     path('orders/pending/list/', views.list_pending_orders, name='list_pending_orders'),
     path('orders/update/', views.update_order_status, name='update_order_status'),####
-    path('orders/delete/', views.delete_order, name='delete_order'),
     path('orders/shipped/', views.update_order_shipped, name='update_order_shipped'),
     path('orders/delivered/', views.update_order_delivered, name='update_order_delivered'),
-    path('orders/remove-product/', views.remove_product_from_order, name='remove_product_from_order'),
-    path('orders/increase/', views.increase_order_item, name='increase_order_item'),
-    path('orders/decrease/', views.decrease_order_item, name='decrease_order_item'),
+    path('orders/<int:order_id>/pay/', views.pay_order_by_wallet, name='pay_order'),
+    path('orders/<int:order_id>/cancel/', views.cancel_order, name='cancel_order'),
 ]
