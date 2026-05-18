@@ -24,7 +24,8 @@ def get_accurate_process_ram_mb():
         return 0.0
 
 def chunk_worker_internal(id_chunk):
-    """الدالة التي يستلمها الخيط لمعالجة دفعة كاملة من البيانات"""
+    """الدالة الداخلية التي يستلمها الخيط لمعالجة دفعة (Chunk) من البيانات.
+    تنبيه أكاديمي: هذه الدالة تعاني من بطء شديد بسبب قفل بايثون العام (GIL) الذي يمنع الخيوط من التوازي الحقيقي."""
     from shop.models import Order
     orders_chunk = list(Order.objects.filter(id__in=id_chunk))
     chunk_tax = 0
@@ -33,14 +34,15 @@ def chunk_worker_internal(id_chunk):
     return chunk_tax
 
 def run_thread_pool_internal(chunk_size=5000):
-    """إدارة تقسيم البيانات وإطلاق خيوط الـ Pool داخلياً لمنع التكرار والـ Crash"""
+    """إدارة تقسيم البيانات وتوزيعها على الـ ThreadPool داخلياً"""
     all_ids = list(Order.objects.values_list('id', flat=True))
     chunks = [all_ids[i:i + chunk_size] for i in range(0, len(all_ids), chunk_size)]
     
     max_threads = 4
     total_tax = 0
     
-    # استخدام الـ ThreadPoolExecutor لتقليل الـ Overhead الخاص بإنشاء الخيوط يدوياً
+    # استخدام الـ ThreadPoolExecutor لإعادة استخدام الخيوط وتقليل تكلفة إنشائها يدوياً.
+    # ملاحظة: التوازي هنا هو توازي ظاهري فقط (Pseudo-Parallelism) وليس توازياً حقيقياً للمعالج بسبب الـ GIL.
     with ThreadPoolExecutor(max_workers=max_threads) as executor:
         results = executor.map(chunk_worker_internal, chunks)
         total_tax = sum(results)
@@ -72,9 +74,10 @@ def trigger_thread_pool():
 
     total_tax = 0
     try:
-        # استدعاء دالة التشغيل المستقرة والداخلية
+        # استدعاء دالة التشغيل المستقرة والداخلية لتجميع الخيوط
         total_tax = run_thread_pool_internal(chunk_size=5000)
     finally:
+        # ضمان إيقاف خيط المراقبة بأمان بعد انتهاء العمل لعدم تسريب الذاكرة
         stop_monitoring = True
         monitor_thread.join()
 
@@ -106,7 +109,7 @@ def trigger_thread_pool():
 
 if __name__ == '__main__':
     scheduler = BlockingScheduler()
-    
+    # ضبط التوقيت الخاص بجدولة المهمة في الخلفية (Cron Job)
     TARGET_HOUR = 14
     TARGET_MINUTE = 23
     

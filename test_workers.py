@@ -14,11 +14,14 @@ from shop.models import Order
 from concurrent.futures import ProcessPoolExecutor
 
 def get_total_system_ram_mb():
-    """تحسب الرام الحالي للعملية الرئيسية + جميع الـ Workers المنبثقة بدقة عالية"""
+    """
+    تحسب الرام الحالي للعملية الرئيسية بالإضافة إلى جميع العمليات الفرعية (Workers) المنبثقة عنها بدقة عالية.
+    تعتمد على مفهوم (Resident Set Size - RSS) لجمع استهلاك الذاكرة الفعلي للبنية التفرعية بأكملها.
+    """
     try:
         main_process = psutil.Process(os.getpid())
         total_mem = main_process.memory_info().rss
-        
+        # المرور على كافة العمليات الوليدة (Child Processes) وجمع ذاكرتها
         for child in main_process.children(recursive=True):
             try:
                 total_mem += child.memory_info().rss
@@ -29,16 +32,18 @@ def get_total_system_ram_mb():
     except Exception:
         return 0.0
 
-# ... (الحفاظ على بقية الاستيرادات ودوال الرام كما هي في كودك)
 
 def run_with_workers_internal(chunk_size=5000):
-    """توزيع المهام بعدالة عبر الـ IDs وتمريرها للعمليات"""
+    """
+    إدارة تقسيم البيانات (Slicing) وتوزيع الدفعات بعدالة تامة على عمال المعالجة المتعددة.
+    تنبيه أكاديمي: هذا النهج ينجح في تخطي قفل بايثون العام (GIL) ويحقق توازياً حقيقياً (True Parallelism) على مستوى المعالج.
+    """
     from shop.models import Order
-    
-    # جلب الـ IDs لتصبح متطابقة تماماً مع طريقة عمل الخيوط والهايبر
+    # جلب المعرفات (IDs) فقط كقائمة مسطحة لتقليل العبء على الذاكرة قبل التقطيع
     all_ids = list(Order.objects.values_list('id', flat=True))
     chunks = [all_ids[i:i + chunk_size] for i in range(0, len(all_ids), chunk_size)]    
-    
+    # إطلاق مجمع العمليات (ProcessPoolExecutor) بحد أقصى 4 عمال لاستغلال أنوية المعالج
+    # ملاحظة: كل عملية منبثقة ستقوم بتحميل بيئة Django بشكل مستقل مما يرفع استهلاك الذاكرة الكلي (Memory Overhead)
     with ProcessPoolExecutor(max_workers=4) as process_executor:
         futures = [process_executor.submit(process_worker_pure, chunk) for chunk in chunks]
         process_results = [f.result() for f in futures]
@@ -46,7 +51,6 @@ def run_with_workers_internal(chunk_size=5000):
         
     return total_tax
 
-# ... (باقي كود الـ trigger_workers والمجدول يبقى كما هو دون تغيير)
 
 def trigger_workers():
     print("\n========================================================")
@@ -59,7 +63,7 @@ def trigger_workers():
     import threading
     peak_mem = start_mem
     stop_monitoring = False
-
+# خيط مراقبة عالي التردد (كل 50 ملي ثانية) لاقتناص أعلى قفزة (Peak RAM) تستهلكها العملية الأم والعمليات الفرعية معاً
     def monitor_ram_loop():
         nonlocal peak_mem
         while not stop_monitoring:
@@ -73,9 +77,10 @@ def trigger_workers():
 
     total_tax = 0
     try:
-        # استدعاء الدالة الداخلية المستقرة
+        # استدعاء دالة المعالجة المتوازية عبر العمليات الصرفة
         total_tax = run_with_workers_internal(chunk_size=5000)
     finally:
+        # ضمان إيقاف خيط مراقبة الرام بأمان بعد انتهاء التنفيذ لمنع أي تسريب للذاكرة (Memory Leak)
         stop_monitoring = True
         monitor_thread.join()
 
@@ -107,7 +112,7 @@ def trigger_workers():
 
 if __name__ == '__main__':
     scheduler = BlockingScheduler()
-    
+    # تحديد وتثبيت وقت تشغيل المهمة الخلفية المؤتمتة (Cron Job)
     TARGET_HOUR = 13
     TARGET_MINUTE = 56
     
