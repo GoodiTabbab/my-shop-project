@@ -1,3 +1,4 @@
+
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
@@ -10,30 +11,39 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import F
 from django.shortcuts import render, get_object_or_404
+from .tasks import send_order_notification
+from concurrent.futures import as_completed
+from shop.thread_pool import get_pool
 import os
 import time
 import re
- 
+
 from decimal import Decimal
 from .models import Wallet
 from django.db import transaction
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import Order, WalletTransaction
-from .models import Cart, Product,Favorite, Store, Order, OrderItem , Product
+from .models import Cart, Product, Favorite, Store, Order, OrderItem
 from .serializers import CartSerializer
 
-from .serializers import UserSerializer, StoreSerializer, StoreWithProductsSerializer, ProductSerializer, OrderSerializer,OrderItemSerializer,FavoriteSerializer
-from django.db import transaction  
+from .serializers import UserSerializer, StoreSerializer, StoreWithProductsSerializer, ProductSerializer, OrderSerializer, OrderItemSerializer, FavoriteSerializer
+from django.db import transaction
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import permissions
+from django.db.models import F
+from django.db import OperationalError
+
 
 class IsAdminUserRole(permissions.BasePermission):
     """صلاحية تسمح فقط للمستخدمين الذين يحملون دور admin بالوصول"""
+
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated and request.user.role == 'admin')
 
 # 1. Register
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register(request):
@@ -49,6 +59,8 @@ def register(request):
     return Response({"Errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
 # 2. Login
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login(request):
@@ -67,6 +79,8 @@ def login(request):
     return Response({"Response Message": "Wrong Password Or Phone Number"}, status=status.HTTP_400_BAD_REQUEST)
 
 # 3. Personal Information (Update Profile)
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def personal_information(request):
@@ -85,6 +99,8 @@ def personal_information(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 # 4. Profile Data (Me)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def me(request):
@@ -97,13 +113,13 @@ def me(request):
 # views.py
 
 
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def list_stores(request):
     """Display a listing of the stores"""
     stores = Store.objects.all()
-    serializer = StoreSerializer(stores, many=True, context={'request': request})
+    serializer = StoreSerializer(
+        stores, many=True, context={'request': request})
 
     return Response({
         "message": "Stores retrieved successfully",
@@ -123,12 +139,14 @@ def store_products(request):
         }, status=status.HTTP_400_BAD_REQUEST)
 
     store = get_object_or_404(Store, name=store_name)
-    serializer = StoreWithProductsSerializer(store, context={'request': request})
+    serializer = StoreWithProductsSerializer(
+        store, context={'request': request})
 
     return Response({
         "message": f"Store {store_name} products retrieved successfully",
         "products": serializer.data['products']
     },)
+
 
 @api_view(['POST'])
 # @permission_classes([IsAdminUserRole])
@@ -176,7 +194,8 @@ def create_store(request):
         timestamp = int(time.time())
         original_filename = image_file.name
         filename = f"{timestamp}_{original_filename}"
-        file_path = default_storage.save(f'stores/{filename}', ContentFile(image_file.read()))
+        file_path = default_storage.save(
+            f'stores/{filename}', ContentFile(image_file.read()))
 
         store = Store.objects.create(
             name=store_data['name'],
@@ -197,8 +216,6 @@ def create_store(request):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def retrieve_store(request, id):
@@ -210,7 +227,6 @@ def retrieve_store(request, id):
         "Response Message": "Store retrieved successfully",
         "Store": serializer.data
     }, status=status.HTTP_200_OK)
-
 
 
 @api_view(['PUT', 'PATCH'])
@@ -247,7 +263,8 @@ def update_store(request, id):
         timestamp = int(time.time())
         original_filename = image_file.name
         filename = f"{timestamp}_{original_filename}"
-        file_path = default_storage.save(f'stores/{filename}', ContentFile(image_file.read()))
+        file_path = default_storage.save(
+            f'stores/{filename}', ContentFile(image_file.read()))
         store.image = file_path
 
     if 'name' in request.data:
@@ -307,7 +324,8 @@ def search_store(request):
 def list_products(request):
     """Display a listing of the products,index() method."""
     products = Product.objects.all()
-    serializer = ProductSerializer(products, many=True, context={'request': request})
+    serializer = ProductSerializer(
+        products, many=True, context={'request': request})
 
     return Response({
         "message": "Products retrieved successfully",
@@ -315,13 +333,12 @@ def list_products(request):
     }, status=status.HTTP_200_OK)
 
 
-
-
 @api_view(['POST'])
 # @permission_classes([IsAdminUserRole])
 def create_product(request):
     """Store a newly created product in storage, store() method."""
-    required_fields = ['name', 'description', 'quantity', 'price', 'image', 'brand', 'store_name']
+    required_fields = ['name', 'description', 'quantity',
+                       'price', 'image', 'brand', 'store_name']
     for field in required_fields:
         if field not in request.data:
             return Response({
@@ -378,7 +395,8 @@ def create_product(request):
         timestamp = int(time.time())
         original_filename = image_file.name
         filename = f"{timestamp}_{original_filename}"
-        file_path = default_storage.save(f'products/{filename}', ContentFile(image_file.read()))
+        file_path = default_storage.save(
+            f'products/{filename}', ContentFile(image_file.read()))
 
         product = Product.objects.create(
             name=request.data['name'],
@@ -490,7 +508,8 @@ def update_product(request, id):
         timestamp = int(time.time())
         original_filename = image_file.name
         filename = f"{timestamp}_{original_filename}"
-        file_path = default_storage.save(f'products/{filename}', ContentFile(image_file.read()))
+        file_path = default_storage.save(
+            f'products/{filename}', ContentFile(image_file.read()))
         updates['image'] = file_path
 
     if 'name' in request.data:
@@ -518,7 +537,6 @@ def update_product(request, id):
                     "Response Message": "Product not found"
                 }, status=status.HTTP_404_NOT_FOUND)
 
-
             return Response({
                 "Response Message": "Product was modified by another request. Please refresh and retry.",
                 "Product": ProductSerializer(latest_product, context={'request': request}).data
@@ -538,8 +556,6 @@ def update_product(request, id):
         "Response Message": "Product updated successfully",
         "Product": ProductSerializer(product, context={'request': request}).data
     }, status=status.HTTP_200_OK)
-
-
 
 
 # Before handling the race condition
@@ -621,8 +637,6 @@ def update_product(request, id):
 #     }, status=status.HTTP_200_OK)
 
 
-
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def search_product(request):
@@ -649,7 +663,6 @@ def search_product(request):
     }, status=status.HTTP_200_OK)
 
 
-
 # After handling the race conditions
 @api_view(['DELETE'])
 @permission_classes([IsAdminUserRole])
@@ -658,8 +671,10 @@ def delete_product(request, id):
     with transaction.atomic():
         # lock currently related rows
         cart_rows = Cart.objects.select_for_update().filter(product_id=id).order_by('pk')
-        favorite_rows = Favorite.objects.select_for_update().filter(product_id=id).order_by('pk')
-        store_links = Product.stores.through.objects.select_for_update().filter(product_id=id).order_by('pk')
+        favorite_rows = Favorite.objects.select_for_update().filter(
+            product_id=id).order_by('pk')
+        store_links = Product.stores.through.objects.select_for_update().filter(
+            product_id=id).order_by('pk')
 
         # lock the product row
         product = Product.objects.select_for_update().filter(id=id).first()
@@ -676,8 +691,10 @@ def delete_product(request, id):
 
         # re-scan related rows after product lock so rows created just before the lock are also cleaned
         cart_rows = Cart.objects.select_for_update().filter(product_id=id).order_by('pk')
-        favorite_rows = Favorite.objects.select_for_update().filter(product_id=id).order_by('pk')
-        store_links = Product.stores.through.objects.select_for_update().filter(product_id=id).order_by('pk')
+        favorite_rows = Favorite.objects.select_for_update().filter(
+            product_id=id).order_by('pk')
+        store_links = Product.stores.through.objects.select_for_update().filter(
+            product_id=id).order_by('pk')
 
         # block deletion if product is already tied to active orders
         active_order_item_exists = OrderItem.objects.filter(
@@ -713,7 +730,6 @@ def delete_product(request, id):
     }, status=status.HTTP_200_OK)
 
 
-
 # Before the race conditions handling
 
 # @api_view(['DELETE'])
@@ -726,7 +742,6 @@ def delete_product(request, id):
 #     return Response({
 #         "Message : ": "Deleted Successfully"
 #     }, status=status.HTTP_200_OK)
-
 
 
 # =========================
@@ -751,8 +766,6 @@ def cart_index(request):
         "Cart": serializer.data,
         "Message": "Retrieved Successfully"
     })
-
-
 
 
 @api_view(['POST'])
@@ -855,8 +868,6 @@ def increase_cart(request):
     })
 
 
-
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def decrease_cart(request):
@@ -884,8 +895,6 @@ def decrease_cart(request):
     return Response({
         "message": "Quantity decreased"
     })
-
-
 
 
 @api_view(['POST'])
@@ -926,6 +935,7 @@ def add_product_favorite(request):
         "message": "Product added to favorites",
         "status": True
     })
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -971,13 +981,15 @@ def delete_product_favorite(request):
         "status": True
     })
 
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def list_user_orders(request):
     """Lis the user's orders. index1() method."""
     user = request.user
     orders = Order.objects.filter(user=user)
-    serializer = OrderSerializer(orders, many=True, context={'request': request})
+    serializer = OrderSerializer(
+        orders, many=True, context={'request': request})
 
     return Response({
         "Message": "Orders Retrieved Successfully",
@@ -997,7 +1009,8 @@ def order_details(request):
 
     order = get_object_or_404(Order, id=order_id)
     order_items = order.items.all()
-    serializer = OrderItemSerializer(order_items, many=True, context={'request': request})
+    serializer = OrderItemSerializer(
+        order_items, many=True, context={'request': request})
 
     return Response({
         "Items": serializer.data,
@@ -1005,7 +1018,37 @@ def order_details(request):
     }, status=status.HTTP_200_OK)
 
 
-#Before handing the race conditions and data integrity
+# BANA 2ND REQUIREMENT - used in original sequential approach
+# def process_cart_item(cart_item, order):
+#     product = cart_item.product
+#     if cart_item.quantity > product.quantity:
+#         raise ValueError(
+#             f"Sorry, only {product.quantity} left for {product.name}")
+#     product.quantity -= cart_item.quantity
+#     product.save()
+#     OrderItem.objects.create(
+#         order=order,
+#         product=product,
+#         quantity=cart_item.quantity,
+#         price=cart_item.price
+#     )
+
+# BANA 2ND REQUIREMENT - parallel OrderItem creation (stock already handled in transaction)
+# SYNC POINT: each thread gets its own DB connection (thread-safe)
+def create_order_item(cart_item, order, product_by_id):
+    product = product_by_id[cart_item.product_id]
+    line_total = float(product.price) * cart_item.quantity
+    # SYNC POINT: Django ORM handles thread-safe DB writes per connection
+    OrderItem.objects.create(
+        order=order,
+        product=product,
+        quantity=cart_item.quantity,
+        price=line_total
+    )
+    return line_total
+
+
+# Before handing the race conditions and data integrity
 
 # @api_view(['POST'])
 # @permission_classes([IsAuthenticated])
@@ -1052,111 +1095,212 @@ def order_details(request):
 #     }, status=status.HTTP_200_OK)
 
 
-
-
-
-#After handing the race conditions and data integrity
+# After handing the race conditions and data integrity
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def create_order(request):
     """Creating a new order from the user's cart. create() method."""
     user = request.user
+
+    # # cart_items = Cart.objects.filter(user=user)
+    # cart_items_qs = Cart.objects.filter(user=user).select_related('product')
+    # cart_items = list(cart_items_qs)
+
+    # # if not cart_items.exists():
+    # if not cart_items:
+
     # require an idempotency key to prevent duplicate order creation
-    idempotency_key = request.headers.get('Idempotency-Key') or request.data.get('idempotency_key')
+    idempotency_key = request.headers.get(
+        'Idempotency-Key') or request.data.get('idempotency_key')
     if not idempotency_key:
+
         return Response({
             "message": "Idempotency key is required (send Idempotency-Key header or idempotency_key field)."
         }, status=status.HTTP_400_BAD_REQUEST)
 
+    # bana old
+#     total_cost = sum(item.price for item in cart_items)
+#     order_data = {
+#         'user': user,
+#         'cost': total_cost,
+#         'state': 'pending',
+#         'pay_status': request.data.get('pay_status', False),
+#         'location': request.data.get('location', '')
+#     }
+#     order = Order.objects.create(**order_data)
+
+#     # BANA COMMENTED THIS
+#     # for cart_item in cart_items:
+
+#     #     product = cart_item.product
+#     #     if cart_item.quantity > product.quantity:
+#     #         return Response({
+#     #             "message": f"Sorry, only {product.quantity} left for {product.name}"
+#     #         }, status=status.HTTP_400_BAD_REQUEST)
+#     #     product.quantity -= cart_item.quantity
+#     #     product.save()
+#     #     OrderItem.objects.create(
+#     #         order=order,
+#     #         product=product,
+#     #         quantity=cart_item.quantity,
+#     #         price=cart_item.price
+#     #     )
+
+#     # BANA ADDED
+#     pool = get_pool()
+#     futures = {pool.submit(process_cart_item, item, order)
+#                            : item for item in cart_items}
+
+#     errors = []
+#     for future in as_completed(futures):
+#         try:
+#             future.result()
+#         except ValueError as e:
+#             errors.append(str(e))
+
+#     if errors:
+#         order.delete()
+#         return Response({"message": errors[0]}, status=status.HTTP_400_BAD_REQUEST)
+
+#     # JUDY
+#     # send_order_notification.delay(order.id, user.email)
+
+#  # Simulate async operation
+#     # cart_items.delete()
+#     cart_items_qs.delete()
+
+    # batool added
     # execute checkout as one atomic unit
-    with transaction.atomic():
-        # if this key already created an order for this user, return that order instead of duplicating.
-        existing_order = Order.objects.select_for_update().filter(
-            user=user,
-            idempotency_key=idempotency_key
-        ).first()
-        if existing_order:
+    max_retries = 10
+    for attempt in range(max_retries):
+        try:
+            with transaction.atomic():
+                # if this key already created an order for this user, return that order instead of duplicating.
+                existing_order = Order.objects.select_for_update().filter(
+                    user=user,
+                    idempotency_key=idempotency_key
+                ).first()
+                if existing_order:
+                    return Response({
+                        "Message": "Order already created for this idempotency key",
+                        "Order": OrderSerializer(existing_order, context={'request': request}).data
+                    }, status=status.HTTP_200_OK)
+
+                # lock this user's cart
+                cart_items = list(
+                    Cart.objects.select_for_update().select_related(
+                        'product').filter(user=user).order_by('id')
+                )
+                if not cart_items:
+                    return Response({
+                        "message": "Cannot create an order with an empty cart."
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                # aggregate the requested quantity per product to validate and deduct stock
+                requested_quantity_by_product = {}
+                for cart_item in cart_items:
+                    requested_quantity_by_product[cart_item.product_id] = (
+                        requested_quantity_by_product.get(
+                            cart_item.product_id, 0) + cart_item.quantity
+                    )
+
+                product_ids = sorted(requested_quantity_by_product.keys())
+                products = list(Product.objects.select_for_update().filter(
+                    id__in=product_ids).order_by('id'))
+                product_by_id = {product.id: product for product in products}
+                if len(product_by_id) != len(product_ids):
+                    return Response({
+                        "message": "One or more products are no longer available."
+                    }, status=status.HTTP_404_NOT_FOUND)
+
+                #  validate stock
+                for product_id in product_ids:
+                    product = product_by_id[product_id]
+                    requested_quantity = requested_quantity_by_product[product_id]
+                    if requested_quantity > product.quantity:
+                        return Response({
+                            "message": f"Sorry, only {product.quantity} left for {product.name}"
+                        }, status=status.HTTP_409_CONFLICT)
+
+                # create the order
+                order = Order.objects.create(
+                    user=user,
+                    idempotency_key=idempotency_key,
+                    cost=0,
+                    state='pending',
+                    pay_status=False,
+                    location=request.data.get('location', '')
+                )
+
+                # deduct stock
+                for product_id in product_ids:
+                    requested_quantity = requested_quantity_by_product[product_id]
+                    updated_rows = Product.objects.filter(
+                        id=product_id,
+                        quantity__gte=requested_quantity
+                    ).update(quantity=F('quantity') - requested_quantity)
+                    product.refresh_from_db()
+                    print("NEW QUANTITY =", product.quantity)
+                    if updated_rows == 0:
+                        product = Product.objects.get(id=product_id)
+                        return Response({
+                            "message": f"Sorry, only {product.quantity} left for {product.name}"
+                        }, status=status.HTTP_409_CONFLICT)
+                    product_by_id[product_id].refresh_from_db()
+
+                Cart.objects.filter(
+                    id__in=[item.id for item in cart_items]).delete()
+
+                # build order items and recompute total cost from locked product prices
+                # total_cost = 0.0
+                # for cart_item in cart_items:
+                #     product = product_by_id[cart_item.product_id]
+                #     line_total = float(product.price) * cart_item.quantity
+                #     total_cost += line_total
+                #     OrderItem.objects.create(
+                #         order=order,
+                #         product=product,
+                #         quantity=cart_item.quantity,
+                #         price=line_total
+                #     )
+
+                # # persist final total and clear cart rows in the same transaction.
+                # order.cost = total_cost
+                # order.save(update_fields=['cost'])
+                # Cart.objects.filter(id__in=[item.id for item in cart_items]).delete()
+            break
+        except OperationalError as e:
+            if '1213' in str(e) and attempt < max_retries - 1:
+                time.sleep(0.05 * (attempt + 1))
+                continue
             return Response({
-                "Message": "Order already created for this idempotency key",
-                "Order": OrderSerializer(existing_order, context={'request': request}).data
-            }, status=status.HTTP_200_OK)
+                "message": "System is busy, please try again."
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-        # lock this user's cart
-        cart_items = list(
-            Cart.objects.select_for_update().select_related('product').filter(user=user).order_by('id')
-        )
-        if not cart_items:
-            return Response({
-                "message": "Cannot create an order with an empty cart."
-            }, status=status.HTTP_400_BAD_REQUEST)
+    # BANA: ThreadPoolExecutor for parallel OrderItem creation (outside transaction)
+    # SYNC POINT: submit all order items to fixed thread pool in parallel
+    pool = get_pool()
+    futures = {pool.submit(create_order_item, item, order,
+                           product_by_id): item for item in cart_items}
 
-        # aggregate the requested quantity per product to validate and deduct stock
-        requested_quantity_by_product = {}
-        for cart_item in cart_items:
-            requested_quantity_by_product[cart_item.product_id] = (
-                requested_quantity_by_product.get(cart_item.product_id, 0) + cart_item.quantity
-            )
+    total_cost = 0.0
+    errors = []
+    # SYNC POINT: as_completed() collects results thread-safely
+    for future in as_completed(futures):
+        try:
+            total_cost += future.result()
+        except Exception as e:
+            errors.append(str(e))
 
-        product_ids = sorted(requested_quantity_by_product.keys())
-        products = list(Product.objects.select_for_update().filter(id__in=product_ids).order_by('id'))
-        product_by_id = {product.id: product for product in products}
-        if len(product_by_id) != len(product_ids):
-            return Response({
-                "message": "One or more products are no longer available."
-            }, status=status.HTTP_404_NOT_FOUND)
+    if errors:
+        order.delete()
+        return Response({"message": errors[0]}, status=status.HTTP_400_BAD_REQUEST)
 
-        #  validate stock
-        for product_id in product_ids:
-            product = product_by_id[product_id]
-            requested_quantity = requested_quantity_by_product[product_id]
-            if requested_quantity > product.quantity:
-                return Response({
-                    "message": f"Sorry, only {product.quantity} left for {product.name}"
-                }, status=status.HTTP_409_CONFLICT)
+    order.cost = total_cost
+    order.save(update_fields=['cost'])
 
-        # create the order
-        order = Order.objects.create(
-            user=user,
-            idempotency_key=idempotency_key,
-            cost=0,
-            state='pending',
-            pay_status=False,
-            location=request.data.get('location', '')
-        )
-
-        # deduct stock
-        for product_id in product_ids:
-            requested_quantity = requested_quantity_by_product[product_id]
-            updated_rows = Product.objects.filter(
-                id=product_id,
-                quantity__gte=requested_quantity
-            ).update(quantity=F('quantity') - requested_quantity)
-            product.refresh_from_db()
-            print("NEW QUANTITY =", product.quantity)
-            if updated_rows == 0:
-                product = Product.objects.get(id=product_id)
-                return Response({
-                    "message": f"Sorry, only {product.quantity} left for {product.name}"
-                }, status=status.HTTP_409_CONFLICT)
-            product_by_id[product_id].refresh_from_db()
-
-        #build order items and recompute total cost from locked product prices
-        total_cost = 0.0
-        for cart_item in cart_items:
-            product = product_by_id[cart_item.product_id]
-            line_total = float(product.price) * cart_item.quantity
-            total_cost += line_total
-            OrderItem.objects.create(
-                order=order,
-                product=product,
-                quantity=cart_item.quantity,
-                price=line_total
-            )
-
-        # persist final total and clear cart rows in the same transaction.
-        order.cost = total_cost
-        order.save(update_fields=['cost'])
-        Cart.objects.filter(id__in=[item.id for item in cart_items]).delete()
+    # JUDY
+    # send_order_notification.delay(order.id, user.email)
 
     return Response({
         "Message": "Order Created Successfully",
@@ -1164,18 +1308,21 @@ def create_order(request):
     }, status=status.HTTP_200_OK)
 
 
-#######??????? what is the difference between this one and index() or list_orders_pending()?
+# ??????? what is the difference between this one and index() or list_orders_pending()?
 @api_view(['GET'])
-@permission_classes([IsAdminUserRole]) # منع الزبائن من حذف المنتجات
+@permission_classes([IsAdminUserRole])  # منع الزبائن من حذف المنتجات
 def list_pending_orders(request):
     """listing of pending orders (alternative endpoint),show() method"""
     orders = Order.objects.filter(state='pending')
-    serializer = OrderSerializer(orders, many=True, context={'request': request})
+    serializer = OrderSerializer(
+        orders, many=True, context={'request': request})
 
     return Response(serializer.data, status=status.HTTP_200_OK)
 ####################
+
+
 @api_view(['PUT', 'PATCH'])
-@permission_classes([IsAdminUserRole]) 
+@permission_classes([IsAdminUserRole])
 def update_order_status(request):
     """Update order status,update() method."""
     # This is a placeholder since the original PHP implementation had issues
@@ -1185,8 +1332,7 @@ def update_order_status(request):
     }, status=status.HTTP_200_OK)
 
 
-
-#Before handling the race conditions
+# Before handling the race conditions
 # @api_view(['POST'])
 # @permission_classes([IsAuthenticated])
 # def cancel_order(request, order_id):
@@ -1239,16 +1385,14 @@ def update_order_status(request):
 #         return Response({"error": f"error occurred: {str(e)}"}, status=500)
 
 
-
-
-
-#after the race condition handling
+# after the race condition handling
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def cancel_order(request, order_id):
     """cancel an order"""
     with transaction.atomic():
-        order = Order.objects.select_for_update().filter(id=order_id, user=request.user).first()
+        order = Order.objects.select_for_update().filter(
+            id=order_id, user=request.user).first()
         if not order:
             return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
         if order.state == 'canceled':
@@ -1261,8 +1405,8 @@ def cancel_order(request, order_id):
 
         order_items = list(
             OrderItem.objects.select_for_update()
-                              .select_related('product')
-                              .filter(order=order)
+            .select_related('product')
+            .filter(order=order)
         )
         if not order_items:
             return Response({"error": "Order has no items to cancel"}, status=status.HTTP_400_BAD_REQUEST)
@@ -1273,29 +1417,33 @@ def cancel_order(request, order_id):
             )
         product_ids = sorted(restore_qty_by_product.keys())
         # lock the involved product rows.
-        products = list(Product.objects.select_for_update().filter(id__in=product_ids))
+        products = list(
+            Product.objects.select_for_update().filter(id__in=product_ids))
         if len(products) != len(product_ids):
             return Response({"error": "One or more products no longer exist"}, status=status.HTTP_404_NOT_FOUND)
         product_by_id = {p.id: p for p in products}
 
         # Refund wallet only if the order was paid
         if order.pay_status:
-            print(f"Processing refund for order #{order.id}, pay_status={order.pay_status}")
+            print(
+                f"Processing refund for order #{order.id}, pay_status={order.pay_status}")
             wallet = Wallet.objects.select_for_update().filter(user=request.user).first()
             if not wallet:
                 return Response({"error": "No wallet linked to this account"}, status=status.HTTP_404_NOT_FOUND)
-            
+
             existing_refund = WalletTransaction.objects.filter(
                 wallet=wallet,
                 order=order,
                 transaction_type='refund'
             ).first()
-            
+
             if existing_refund:
-                print(f"Refund already exists for order #{order.id}, transaction #{existing_refund.id}")
+                print(
+                    f"Refund already exists for order #{order.id}, transaction #{existing_refund.id}")
             else:
                 refund_amount = Decimal(str(order.cost))
-                print(f"Refunding {refund_amount} to wallet for order #{order.id}")
+                print(
+                    f"Refunding {refund_amount} to wallet for order #{order.id}")
                 wallet.balance += refund_amount
                 wallet.save(update_fields=['balance'])
                 WalletTransaction.objects.create(
@@ -1305,12 +1453,15 @@ def cancel_order(request, order_id):
                     transaction_type='refund',
                     description=f"Refund for canceled order #{order.id}"
                 )
-                print(f"Refund transaction created successfully for order #{order.id}")
+                print(
+                    f"Refund transaction created successfully for order #{order.id}")
         else:
-            print(f"Order #{order.id} was not paid (pay_status={order.pay_status}), skipping refund")
+            print(
+                f"Order #{order.id} was not paid (pay_status={order.pay_status}), skipping refund")
 
         for product_id, qty in restore_qty_by_product.items():
-            Product.objects.filter(id=product_id).update(quantity=F('quantity') + qty)
+            Product.objects.filter(id=product_id).update(
+                quantity=F('quantity') + qty)
 
         order.state = 'canceled'
         order.pay_status = False
@@ -1319,9 +1470,8 @@ def cancel_order(request, order_id):
     return Response({"message": "Order canceled successfully"})
 
 
-
 @api_view(['PUT', 'PATCH'])
-@permission_classes([IsAdminUserRole]) # منع الزبائن من حذف المنتجات
+@permission_classes([IsAdminUserRole])  # منع الزبائن من حذف المنتجات
 def update_order_shipped(request):
     """Update order state to 'shipped'"""
     order_id = request.data.get('order_id')
@@ -1340,9 +1490,8 @@ def update_order_shipped(request):
     }, status=status.HTTP_200_OK)
 
 
-
 @api_view(['PUT', 'PATCH'])
-@permission_classes([IsAdminUserRole]) # منع الزبائن من حذف المنتجات
+@permission_classes([IsAdminUserRole])  # منع الزبائن من حذف المنتجات
 def update_order_delivered(request):
     """Update order state to 'delivered'"""
     order_id = request.data.get('order_id')
@@ -1361,13 +1510,11 @@ def update_order_delivered(request):
     }, status=status.HTTP_200_OK)
 
 
-
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def pay_order_by_wallet(request, order_id):
     order = get_object_or_404(Order, id=order_id, user=request.user)
-    
+
     if order.pay_status:
         return Response({"error": "Already paid"}, status=400)
 
@@ -1379,7 +1526,7 @@ def pay_order_by_wallet(request, order_id):
             print(f"{request.user.phone_number} locked wallet")
 
             # time.sleep(3)
-            
+
             if wallet.balance < order.cost:
                 return Response({"error": "Balance not enoughٍ"}, status=400)
 
@@ -1403,13 +1550,7 @@ def pay_order_by_wallet(request, order_id):
             )
 
         return Response({"message": "paid successfully"})
-        
+
     except Exception as e:
         print(str(e))
         return Response({"error": "An error occurred, Try later "}, status=500)
-
-
-
-
-
-
