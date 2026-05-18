@@ -4,7 +4,7 @@ from locust import HttpUser, task, between
 
 class ShopUser(HttpUser):
     # Simulates a user waiting between 1 and 3 seconds between actions
-    wait_time = between(4, 5)
+    wait_time = between(1, 3)
     
     def on_start(self):
         """
@@ -14,9 +14,9 @@ class ShopUser(HttpUser):
         # 1. Create a unique user or log in
         # (Using a hardcoded test account for simplicity, ensure it exists in your DB)
         login_data = {
-            "username": "test_user",
-            "phone_number":"0993137860",
-            "password": "StrongPassword123!"
+            
+            "phone_number":"0951504887",
+            "password": "judy"
         }
         
         # We hit your login or register endpoint to get the token
@@ -41,7 +41,7 @@ class ShopUser(HttpUser):
             "quantity": 1
         }
         self.client.post("/api/cart/store/", json=cart_payload)
-        
+        time.sleep(2)
         # Step 2: Hit the create order endpoint
         order_payload = {
             "pay_status": True,

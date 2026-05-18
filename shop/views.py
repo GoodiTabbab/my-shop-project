@@ -839,8 +839,10 @@ def create_order(request):
             quantity=cart_item.quantity,
             price=cart_item.price
     )
+    # with asynchronous queue (here is Celery), we can send the notification without blocking the main thread
     send_order_notification.delay(order.id, user.email)
-    
+    # without celery, this will block the main thread 
+    #time.sleep(5)
  # Simulate async operation
     cart_items.delete()
 
