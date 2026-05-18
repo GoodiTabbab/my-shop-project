@@ -1,5 +1,5 @@
 from django.db import models
-from django.contrib.auth.models import AbstractUser, BaseUserManager
+from django.contrib.auth.models import AbstractUser, BaseUserManager,User
 
 class CustomUserManager(BaseUserManager):
     def create_user(self, phone_number, password=None, **extra_fields):
@@ -18,21 +18,17 @@ class CustomUserManager(BaseUserManager):
         return self.create_user(phone_number, password, **extra_fields)
 
 class User(AbstractUser):
-    # الحقول الأساسية
     phone_number = models.CharField(max_length=20, unique=True)
     first_name = models.CharField(max_length=150, blank=True, null=True)
     last_name = models.CharField(max_length=150, blank=True, null=True)
     
-    # الحقول التي كانت تسبب نقصاً أو أخطاء
     location = models.CharField(max_length=255, blank=True, null=True)
     role = models.CharField(max_length=50, default='user')
     image = models.ImageField(upload_to='users/', blank=True, null=True)
     
-    # حقول إضافية للمستقبل (اختياري)
     email = models.EmailField(unique=True, blank=True, null=True)
     x_and_y = models.CharField(max_length=255, blank=True, null=True)
 
-    # إعدادات الهوية
     USERNAME_FIELD = 'phone_number'
     REQUIRED_FIELDS = [] # تركناها فارغة لأن التسجيل بالهاتف فقط
 
@@ -58,6 +54,7 @@ class Product(models.Model):
     quantity = models.IntegerField()
     price = models.FloatField() # يقابل double
     image = models.ImageField(upload_to='products/')
+    version = models.IntegerField(default=0)  # Optimistic locking token incremented on every successful update.
     # علاقة Many-to-Many مع المتجر
     stores = models.ManyToManyField(Store, related_name='products')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -88,12 +85,22 @@ class Order(models.Model):
         ('canceled', 'Canceled'),
     ]
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders')
+    idempotency_key = models.CharField(max_length=128, null=True, blank=True, db_index=True)  # to prevent duplicate orders on retries/double-submit (create_order method).
     cost = models.FloatField()
     state = models.CharField(max_length=20, choices=STATE_CHOICES, default='pending')
     location = models.CharField(max_length=255, blank=True, null=True)
     pay_status = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'idempotency_key'],
+                condition=models.Q(idempotency_key__isnull=False),
+                name='unique_order_user_idempotency_key',
+            )
+        ]
 
 # 7. Order Item Model
 class OrderItem(models.Model):
@@ -102,3 +109,31 @@ class OrderItem(models.Model):
     quantity = models.IntegerField()
     price = models.FloatField()
     created_at = models.DateTimeField(auto_now_add=True)
+
+# 8 . wallet
+
+class Wallet(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='wallet')
+    balance = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+
+    def __str__(self):
+        return f"Wallet of {self.user.username} - Balance: {self.balance}"
+    
+# 9 .Transaction
+
+class WalletTransaction(models.Model):
+    TRANSACTION_TYPES = [
+        ('deposit', 'إيداع/شحن'),
+        ('withdraw', 'سحب/دفع'),
+        ('refund', 'استرداد'),
+    ]
+
+    wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name='transactions')
+    order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True) # لربط العملية بطلب معين
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    transaction_type = models.CharField(max_length=10, choices=TRANSACTION_TYPES)
+    description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.transaction_type} - {self.amount} - {self.wallet.user.username}"    
