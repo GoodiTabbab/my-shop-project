@@ -1,7 +1,7 @@
 from shop.models import User, Store, Product, Cart, Order, OrderItem
 import os
 import random
-
+from django.db import connection
 # ─────────────────────────────────────────
 # Grab real image filenames from your folders
 # ─────────────────────────────────────────
@@ -30,12 +30,30 @@ product_imgs = get_images('products')
 # STEP 1 — Wipe old test data (keeps superusers)
 # ─────────────────────────────────────────
 print("🧹 Clearing old data...")
-OrderItem.objects.all().delete()
+# OrderItem.objects.all().delete()
+with connection.cursor() as cursor:
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
+    cursor.execute("DELETE FROM shop_wallettransaction")
+    cursor.execute("DELETE FROM shop_wallet")
+    cursor.execute("DELETE FROM shop_orderitem")
+    cursor.execute("DELETE FROM shop_order")
+    cursor.execute("DELETE FROM shop_cart")
+    cursor.execute("DELETE FROM shop_product_stores")
+    cursor.execute("DELETE FROM shop_product")
+    cursor.execute("DELETE FROM shop_store")
+    cursor.execute("DELETE FROM shop_user WHERE is_superuser = 0")
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
 Order.objects.all().delete()
 Cart.objects.all().delete()
 Product.objects.all().delete()
 Store.objects.all().delete()
+with connection.cursor() as cursor:
+    try:
+        cursor.execute("DELETE FROM shop_wallet")
+    except Exception:
+        pass
 User.objects.filter(is_superuser=False).delete()
+
 
 # ─────────────────────────────────────────
 # STEP 2 — Create 20 users
@@ -117,6 +135,18 @@ product_data = [
     ('Yoga Mat',            'Non-slip eco-friendly yoga mat',
      'Gaiam',     700,  29.99),
 ]
+
+
+with connection.cursor() as cursor:
+    try:
+        cursor.execute(
+            "ALTER TABLE shop_product MODIFY COLUMN version INT NOT NULL DEFAULT 0")
+    except Exception:
+        try:
+            cursor.execute(
+                "ALTER TABLE shop_product ADD COLUMN version INT NOT NULL DEFAULT 0")
+        except Exception:
+            pass
 
 products = []
 for i, (name, desc, brand, qty, price) in enumerate(product_data):

@@ -39,7 +39,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'shop.apps.ShopConfig',
+    'shop',
     'rest_framework',
     'celery',
 
@@ -56,8 +56,8 @@ CELERY_TIMEZONE = 'UTC'
 
 
 MIDDLEWARE = [
-    'shop.system_metrics_middleware.SystemMetricsMiddleware',
     'django_prometheus.middleware.PrometheusBeforeMiddleware',
+    'shop.system_metrics_middleware.SystemMetricsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -66,7 +66,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'django_prometheus.middleware.PrometheusBeforeMiddleware',
+    'django_prometheus.middleware.PrometheusAfterMiddleware',
 ]
 
 ROOT_URLCONF = 'core.urls'
@@ -95,15 +95,12 @@ WSGI_APPLICATION = 'core.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'parallel_shop',
+        'NAME': 'shop_db',
         'USER': 'root',
-        'PASSWORD': '',
-        'HOST': '127.0.0.1',
-        'PORT': '3306'
-
-        # 'ENGINE': 'django.db.backends.sqlite3',
-        # 'NAME': BASE_DIR / 'db.sqlite3',
-
+        'PASSWORD': 'judyjudy',
+        'HOST': 'localhost',
+        'PORT': '3306',
+         'CONN_MAX_AGE': 60,  # reuse connections for 60 seconds
     }
 }
 
